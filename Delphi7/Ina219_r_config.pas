@@ -36,7 +36,7 @@ type
     RadioGroupShuntADCRes: TRadioGroup;
     RadioGroupMode: TRadioGroup;
     ButtonOk: TButton;
-    ButtonCansel: TButton;
+    ButtonCancel: TButton;
     RadioGroupBusADCRes: TRadioGroup;
     GroupBox1: TGroupBox;
     CheckBoxReset: TCheckBox;

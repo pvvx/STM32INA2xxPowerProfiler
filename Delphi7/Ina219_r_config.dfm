@@ -119,12 +119,12 @@ object Form219Config: TForm219Config
     TabOrder = 4
     OnClick = ButtonOkClick
   end
-  object ButtonCansel: TButton
+  object ButtonCancel: TButton
     Left = 400
     Top = 304
     Width = 75
     Height = 25
-    Caption = 'Cansel'
+    Caption = 'Cancel'
     ModalResult = 2
     TabOrder = 5
   end

@@ -1,6 +1,6 @@
 object frmMain: TfrmMain
-  Left = 1386
-  Top = 567
+  Left = 1273
+  Top = 204
   Width = 1139
   Height = 648
   Color = clBtnFace
@@ -453,7 +453,7 @@ object frmMain: TfrmMain
   end
   object Timer1: TTimer
     Enabled = False
-    Interval = 84
+    Interval = 23
     OnTimer = TimerTimer
     Left = 632
     Top = 78

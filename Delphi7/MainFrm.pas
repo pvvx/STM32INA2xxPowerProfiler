@@ -10,13 +10,19 @@ uses
   TeeSeriesStats,  IniFiles;
 
 const
+//    WM_NEW_STATUS = WM_USER+1;
+//    WM_RD_COMMAND = WM_USER+1;
+//    WM_NEW_ADC_BLK = WM_USER+2;
+
     INA2XX_I2C_ADDR = $80;
-    STM32_DEVICE_ID = $11;
+    STM32_DEVICE_ID = $15;
     INA226_MID_REG = $fe;
     INA226_DID_REG = $ff;
     INA226_MID = $4954;
     INA226_DID = $6022;
     SMBus_Speed_kHz = 1000; // default
+
+    SMP_BUF_CNT = 16383;
 
     CMD_GET_VER = $00; // Get Ver
     CMD_SET_INI = $01; // Get/Set CFG/ini & Start measure
@@ -77,6 +83,16 @@ type
       clk_khz     : word;
       init        : array [0..3] of ina2xx_rwr_t;
       data        : array [0..3] of ina2xx_rrd_t;
+  end;
+
+  TCommThread = class(TThread)
+  private
+    procedure QueryPort;
+//  public
+//   function GetWaitCnt : dword;
+//   procedure SetWaitCnt(cnt : dword);
+  protected
+    procedure Execute; override;
   end;
 
   TfrmMain = class(TForm)
@@ -141,7 +157,7 @@ type
     procedure ButtonPrtGrfClick(Sender: TObject);
     procedure ButtonSaveGRFClick(Sender: TObject);
 
-    procedure AddCrfSamples(count : integer);
+    procedure AddCrfSamples;
     function GrfSetColor(ChNum : integer): integer;
     procedure ButtonAsizeClick(Sender: TObject);
     procedure ButtonScalMClick(Sender: TObject);
@@ -158,9 +174,8 @@ type
     procedure SetGrfMarging;
     procedure SetParStart;
     function ReadBlk(id : byte) : boolean;
-    function SendBlk : boolean;
+    function SendBlk(data_count : byte) : boolean;
     function ReadStatus : boolean;
-    function ReadGgfData : boolean;
     function ReadRegister(regnum : integer) : boolean;
     function ResetIna2xx : boolean;
     function RdAllRegs : boolean;
@@ -183,19 +198,9 @@ type
     Ini_Cfg : Tcfg_ini;
     dev_id : byte;
     dev_ver: word;
-    dev_not_send_count : dword;
-    dev_all_send_count : dword;
-    dev_send_err : byte;
     dev_alert_addr : byte;
     dev_ina226 : boolean;
     DeviceTypeRecognized : boolean;
-
-    bufrx : array [0..63] of byte;
-    lenrx : integer;
-    wait_id : byte;
-    wait_cnt : integer;
-
-    buftx : array [0..63] of byte;
 
     TriggerI : Double;
     TriggerU : Double;
@@ -206,22 +211,23 @@ type
 
     SamplesCount : dword;
     MaxSamples: dword;
-    SamplesEna : boolean;
     SamplesAutoStop : boolean;
     ConnectStartTime : TDateTime;
-    bufsmp : array [0..63] of Smallint;
     ConnectTime : TDateTime;
     ChartEnables : byte;
     OldCurI, OldCurU: double;
     CurI, CurU: double;
     SumI, SumU: double;
     FormConfigOk : integer;
+//    procedure ReadNewAdcBlk(var Msg: TMessage); message WM_NEW_ADC_BLK;
+//    procedure ReadCommand(var Msg: TMessage); message WM_RD_COMMAND;
   public
     { Public declarations }
   end;
 
 var
   frmMain: TfrmMain;
+  CommThread: TCommThread;
   ina2xx_reg : ina2xx_regs_t;
   blk_cfg : ina2xx_cfg_t;
 
@@ -232,7 +238,24 @@ var
   I_zero : double;
   U_zero : double;
   OldsI, OldsU: double;
-  
+
+   SamplesEna : boolean;
+   bufsmp : array [0..SMP_BUF_CNT] of Smallint;
+   ismprx, ismptx : dword;
+
+   buftx : array [0..63] of byte;
+    lentx : integer;
+
+   bufrx : array [0..63] of byte;
+    lenrx : integer;
+    wait_id : byte;
+    wait_cnt : dword;
+
+//   dev_send_smps : dword;
+    dev_not_send_count : dword;
+    dev_all_send_count : dword;
+    dev_send_err : byte;
+
   IniFile : TIniFile = nil;
   IniFileName : string = '.\stm32ina2xx.ini';
 
@@ -242,6 +265,166 @@ uses
   StrUtils, ComPort, HexUtils, Ina219_r_config, Ina226_r_config;
 
 {$R *.dfm}
+
+procedure StartComThread;
+begin
+  if CommThread = nil then
+    CommThread := TCommThread.Create(False);
+  if CommThread = nil then begin
+    SysErrorMessage(GetLastError);
+//    Exit;
+  end;
+end;
+
+procedure CloseComThread;
+begin
+  if CommThread <> nil then
+    CommThread.Terminate;
+  CommThread := nil;
+end;
+
+procedure TCommThread.Execute;
+begin
+  repeat
+    QueryPort;
+  until Terminated;
+end;
+
+{
+function TCommThread.GetWaitCnt : dword;
+begin
+  result := wait_cnt;
+end;
+
+procedure TCommThread.SetWaitCnt(cnt : dword);
+begin
+  wait_cnt := cnt;
+end;
+}
+
+procedure TCommThread.QueryPort;
+var
+  Buff: array[0..61] of Byte;
+  ByteReaded, itx: Dword;
+  i, cnt : integer;
+begin
+  if lentx <> 0 then begin
+     if not WriteCom(@buftx, lentx) then begin
+//    SysErrorMessage(GetLastError);
+     end;
+     lentx := 0;
+  end;
+  if not ReadFile(hCom, Buff, SizeOf(Buff), ByteReaded, nil) then begin
+//    SysErrorMessage(GetLastError);
+    Exit;
+  end;
+  if ByteReaded > 0 then  begin
+      if Buff[0] = $55 then begin
+        // что-то есть
+        if ((Buff[1] and $7f) = RES_OUT_REGS) then begin
+          // блок данных для графиков
+          if ((Buff[1] and $80) = 0) then begin
+            if (ByteReaded > 3) then begin
+              if SamplesEna then begin
+                cnt := (ByteReaded - 2) div 2;
+//                dev_send_smps := dev_send_smps + cnt;
+                itx := ismptx and SMP_BUF_CNT;
+                for i:=1 to cnt do begin
+                  bufsmp[itx] := Buff[i*2] or (Buff[i*2 + 1] shl 8);
+                  Inc(itx);
+                  itx := itx and SMP_BUF_CNT;
+                end;
+                ismptx := itx;
+              end;
+            end;
+          end
+          else begin
+            // ошибки при чтении регистров по таймеру
+            if (ByteReaded = 2+8) then begin
+                dev_all_send_count :=  Buff[0+2] or (Buff[1+2] shl 8) or (Buff[2+2] shl 16) or (Buff[3+2] shl 24);
+                dev_not_send_count :=  Buff[4+2] or (Buff[5+2] shl 8) or (Buff[6+2] shl 16) or (Buff[7+2] shl 24);
+                dev_send_err := Buff[8+2]; // номер ошибки
+            end
+            else begin
+                dev_all_send_count := 0;
+                dev_not_send_count := 0;
+                dev_send_err := 255; // общая ошибка
+            end;
+//            SendMessage(frmMain.Handle, WM_NEW_ADC_BLK, 1, 0);
+          end;
+        end else begin
+        // не $07
+          if (wait_cnt > 0) then begin
+            //  ожидание ответа команде
+            if ((Buff[1] and $7f) = wait_id) then begin
+              // ответ пришел
+              if ((Buff[1] and $80) <> 0) then
+                  wait_id := wait_id or $80;
+              if ByteReaded > 2 then
+                 move(Buff[2], bufrx, ByteReaded - 2);
+              lenrx := ByteReaded - 2;
+              wait_cnt := 0;
+//              SendMessage(frmMain.Handle, WM_RD_COMMAND, 1, 0);
+            end else begin
+              Inc(wait_cnt);
+              if wait_cnt > 3 then begin
+                // ответ не пришел
+                lenrx := 0;
+                wait_cnt := 0;
+//                SendMessage(frmMain.Handle, WM_RD_COMMAND, 1, 0);
+//                StatusBar.Panels[2].Text:='Нет ответа от устройства в '+ sComNane+'!';
+                exit;
+              end;
+            end;
+          end;
+        end;
+      end;
+    end;
+end;
+
+function TfrmMain.SendBlk( data_count : byte) : boolean;
+var
+x : integer;
+begin
+   x := 0;
+   result := FALSE;
+   while(lentx <> 0) do begin
+    sleep(1);
+    Inc(x);
+    if x > 500 then begin
+      lentx := 0;
+      exit;
+    end;
+   end;
+   buftx[0]:=$55;
+   wait_id := buftx[1];
+   wait_cnt := 1;
+   lentx := data_count + 2;
+   result := TRUE;
+end;
+
+
+function TfrmMain.ReadBlk(id : byte) : boolean;
+var
+x : integer;
+begin
+   if CommThread = nil then begin
+     result := false;
+   end;
+   result := true;
+   x := 0;
+   while(wait_cnt <> 0) do begin
+      sleep(1);
+      Inc(x);
+      if x > 1000 then begin
+         wait_cnt := 0;
+         result := false;
+         exit;
+      end;
+   end;
+   if (wait_id and $80) <> 0 then
+     result := false;
+end;
 
 // Чтение переменных из .ini
 procedure TfrmMain.ReadIni;
@@ -396,7 +579,7 @@ begin
       try
         if GetFileVersionInfo(PChar(ParamStr(0)), 0, VerInfoSize, VerInfo) then
         begin
-        
+
           VerQueryValue(VerInfo, '\', Pointer(VerValue), VerValueSize);
           with VerValue^ do
           begin
@@ -444,7 +627,7 @@ begin
   aStartPos := aStartPos + (vLastPos - aStartPos) + 1;
 end;
 
-//Заполняет список aList наденными в системе COM портами
+// Заполняет список aList наденными в системе COM портами
 procedure GetComPorts(aList: TStrings; aNameStart: string);
 var
   vBuf: string;
@@ -464,7 +647,7 @@ begin
       vRes := QueryDosDevice(nil, @vBuf[1], vBufSize) ;
       vErr := GetLastError();
 
-      //Вариант для двухтонки
+      // Вариант для двухтонки
       if (vRes <> 0) and (vErr = ERROR_INSUFFICIENT_BUFFER) then
         begin
           vBufSize := vRes;
@@ -665,7 +848,9 @@ begin
         PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
         ClearGrf;
         ChartEnables := 0;
+        StartComThread;
         if not GetDevVersion then begin
+          CloseComThread;
           CloseCom;
           if dev_id <> STM32_DEVICE_ID then begin
             ShowMessage('Error device ID!'+#13#10+'Com closed.');
@@ -722,6 +907,7 @@ begin
     end;
   end
   else begin
+     CloseComThread;
      CloseCom;
      ButtonOpen.Caption := 'Open';
      ComboBox.Enabled := True;
@@ -746,12 +932,10 @@ begin
    else begin
      ChartEnables := Form219Config.DevIniCfg(mode);
    end;
-   buftx[2] := CMD_SET_INI;
-   buftx[3] := SizeOf(blk_cfg);
-   move(blk_cfg, buftx[4], SizeOf(blk_cfg));
-   if SendBlk then begin
-//     sleep(20);
-     if ReadBlk(buftx[2]) and (lenrx = SizeOf(blk_cfg)) then begin
+   buftx[1] := CMD_SET_INI;
+   move(blk_cfg, buftx[2], SizeOf(blk_cfg));
+   if SendBlk(SizeOf(blk_cfg)) then begin
+     if ReadBlk(buftx[1]) and (lenrx >= SizeOf(blk_cfg)) then begin
        move(bufrx, blk_cfg, SizeOf(blk_cfg));
        StatusBar.Panels[2].Text:='Конфигурация передана в устройство на '+ sComNane+'.';
        result := True;
@@ -767,11 +951,9 @@ function TfrmMain.GetSmbusAlert : boolean;
 begin
      result := False;
      Timer1.Enabled := False;
-     buftx[2]:=CMD_GET_DAA; // Get SMBUS dev Alert addr
-     buftx[3]:=0;
-     if SendBlk then begin
-//       sleep(20);
-       if ReadBlk(buftx[2]) and (lenrx = 1) then begin
+     buftx[1]:=CMD_GET_DAA; // Get SMBUS dev Alert addr
+     if SendBlk(0) then begin
+       if ReadBlk(buftx[1]) and (lenrx = 1) then begin
          dev_alert_addr := bufrx[0];
          result := True;
        end;
@@ -783,11 +965,9 @@ function TfrmMain.GetDevIniCfg : boolean;
 begin
      result := False;
      Timer1.Enabled := False;
-     buftx[2]:=CMD_SET_INI; // Set/Get CFG/ini & Start measure
-     buftx[3]:=0;
-     if SendBlk then begin
-//       sleep(20);
-       if ReadBlk(buftx[2]) and (lenrx = SizeOf(blk_cfg)) then begin
+     buftx[1]:=CMD_SET_INI; // Set/Get CFG/ini & Start measure
+     if SendBlk(0) then begin
+       if ReadBlk(buftx[1]) and (lenrx = SizeOf(blk_cfg)) then begin
          move(bufrx, blk_cfg, SizeOf(blk_cfg));
          result := True;
        end;
@@ -798,6 +978,8 @@ end;
 
 procedure TfrmMain.ButtonStartClick(Sender: TObject);
 begin
+    SamplesEna := False;
+    Timer1.Enabled := False;
     if SetDevIniCfg(1) then begin
         ConnectStartTime := GetTime;
         StatusBar.Panels[2].Text:='Запущено непрерывное чтение INA2XX в устройстве на '+ sComNane+'.';
@@ -806,6 +988,9 @@ begin
            SamplesAutoStop := False;
            ClearGrf;
         end;
+//        dev_send_smps := 0;
+        ismptx := 0;
+        ismprx := 0;
         SamplesEna := True;
         Timer1.Enabled := True;
    end;
@@ -813,16 +998,17 @@ end;
 
 procedure TfrmMain.ButtonStopClick(Sender: TObject);
 begin
+   SamplesEna := False;
+   Timer1.Enabled := False;
    if (not ReadStatus)
     or (not StopReadDevice) then
       StatusBar.Panels[2].Text:='Ошибка передачи в устройство на '+ sComNane+'!'
    else begin
-      StatusBar.Panels[2].Text:='Непрерывное чтение устройства на '+ sComNane+' остановлено. Пропуск ' + IntToStr(dev_not_send_count) + ' блоков, счетчик: ' + IntToStr(dev_all_send_count) + '.';
-      SamplesEna := False;
-      Timer1.Enabled := False;
+      StatusBar.Panels[2].Text:='Непрерывное чтение устройства на '+ sComNane+' остановлено. Пропуск ' + IntToStr(dev_not_send_count) + ' блоков, счетчик: ' + IntToStr(dev_all_send_count) + '.'; // +    IntToStr(dev_send_smps);
+      sleep(10);
       PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-      while ReadGgfData do ;
-      PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
+      ismptx := 0;
+      ismprx := 0;
       SetParStart;
    end;
 end;
@@ -843,21 +1029,20 @@ begin
   if FormConfigOk = mrOk then begin
     Timer1.Enabled := False;
 
-    buftx[2]:=CMD_SET_REG; // Set Reg
-    buftx[3]:=4;
-    buftx[4]:=INA2XX_I2C_ADDR;
-    buftx[5]:=0;
-    buftx[6]:= ina2xx_reg.config;
-    buftx[7]:= ina2xx_reg.config  shr 8;
+    buftx[1]:=CMD_SET_REG; // Set Reg
 
-    if SendBlk then begin
-//    sleep(15);
-      if not ReadBlk(buftx[2]) or (lenrx <> 4) then begin
+    buftx[2]:=INA2XX_I2C_ADDR;
+    buftx[3]:=0;
+    buftx[4]:= ina2xx_reg.config;
+    buftx[5]:= ina2xx_reg.config  shr 8;
+
+    if SendBlk(4) then begin
+      if not ReadBlk(buftx[1]) or (lenrx <> 4) then begin
         ShowMessage('Send config reg error!');
         FormConfigOk := mrIgnore;
       end
       else begin
-          StatusBar.Panels[2].Text:='Регистры конфигурации записаны в устройство.';
+          StatusBar.Panels[2].Text:='Регистр конфигурации записан в устройство.';
       end;
     end else begin
       ShowMessage('Send config reg error!');
@@ -876,11 +1061,9 @@ begin
     if FormConfigOk = mrOk then begin
       Timer1.Enabled := False;
       if SetDevIniCfg(0) then begin
-        buftx[2]:=CMD_WRF_INI; // Store CFG/ini in Flash
-        buftx[3]:=0;
-        if SendBlk then begin
-//        sleep(15);
-          if ReadBlk(buftx[2]) and (lenrx = 0) then begin
+        buftx[1]:=CMD_WRF_INI; // Store CFG/ini in Flash
+        if SendBlk(0) then begin
+          if ReadBlk(buftx[1]) and (lenrx = 0) then begin
             StatusBar.Panels[2].Text:='Конфигурация записана во Flash в устройстве на '+ sComNane+'.';
           end;
         end;
@@ -896,19 +1079,19 @@ begin
   result := False;
   for i:=0 to 5 do begin
     PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-    buftx[2]:=CMD_SET_INI; // Set/Get CFG/ini & Start measure
-    buftx[3]:=6;
-    buftx[4]:=0; // read regs = 0
-    buftx[5]:=0; // write regs = 0
+    buftx[1]:=CMD_SET_INI; // Set/Get CFG/ini & Start measure
+
+    buftx[2]:=0; // read regs = 0
+    buftx[3]:=0; // write regs = 0
+    buftx[4]:=$90; // 400
+    buftx[5]:=$01; //
     buftx[6]:=$90; // 400
     buftx[7]:=$01; //
-    buftx[8]:=$90; // 400
-    buftx[9]:=$01; //
-    if SendBlk then begin
-//      sleep(5);
-      if ReadBlk(buftx[2]) and (lenrx = SizeOf(blk_cfg)) then begin
+
+    if SendBlk(6) then begin
+      if ReadBlk(buftx[1]) and (lenrx = SizeOf(blk_cfg)) then begin
         move(bufrx, blk_cfg, SizeOf(blk_cfg));
-        sleep(20);
+        sleep(10);
         PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
         result := True;
         break;
@@ -924,14 +1107,12 @@ begin
   result := False;
   for i:=0 to 5 do begin
     PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-    buftx[2]:= CMD_GET_VER; // Get Version
-    buftx[3]:=0;
-    if SendBlk then begin
-      sleep(5);
-      if ReadBlk(buftx[2]) and (lenrx = 4) then begin
-        dev_id := bufrx[2];
-        dev_ver := bufrx[0] or (bufrx[1] shl 8);
-        StatusBar.Panels[2].Text:='Устройство ID:' + IntToHex(dev_id, 2) +' версии '+IntToStr((bufrx[1] and $F0) shr 4)+'.'+IntToStr(bufrx[1] and $F)+'.'+IntToStr((bufrx[0] and $F0) shr 4)+'.'+IntToStr(bufrx[0] and $0f)+' подключено на '+ sComNane +'.';
+    buftx[1]:= CMD_GET_VER; // Get Version
+    if SendBlk(0) then begin
+      if ReadBlk(buftx[1]) and (lenrx = 4) then begin
+        dev_id := bufrx[0] or (bufrx[1] shl 8);
+        dev_ver := bufrx[2] or (bufrx[3] shl 8);
+        StatusBar.Panels[2].Text:='Устройство ID:' + IntToHex(dev_id, 2) +' версии '+IntToStr((dev_ver shr 12) and $0f) +'.'+IntToStr((dev_ver shr 8) and $0f)+'.'+IntToStr((dev_ver shr 4) and $0f)+'.'+IntToStr(dev_ver and $0f)+' подключено на '+ sComNane +'.';
         if dev_id = STM32_DEVICE_ID then begin
           if StopReadDevice
             and ReadRegister(INA226_MID_REG)
@@ -954,14 +1135,14 @@ function TfrmMain.ResetIna2xx : boolean;
 begin
    Timer1.Enabled := False;
    result := true;
-   buftx[2]:=CMD_SET_REG; // Cmd: Set word
-   buftx[3]:=4;
-   buftx[4]:=INA2XX_I2C_ADDR;
+   buftx[1]:=CMD_SET_REG; // Cmd: Set word
+
+   buftx[2]:=INA2XX_I2C_ADDR;
+   buftx[3] := 0;
+   buftx[4] := $80;
    buftx[5] := 0;
-   buftx[6] := $80;
-   buftx[7] := 0;
-   if SendBlk and ReadBlk(buftx[2]) and (lenrx = 4) then begin
-//     sleep(20);
+
+   if SendBlk(4) and ReadBlk(buftx[1]) and (lenrx = 4) then begin
      if not RdAllRegs then begin
        result := false;
      end;
@@ -985,13 +1166,12 @@ begin
    else
      i := regnum and 7;
    result := true;
-   buftx[2]:=CMD_GET_REG; // Cmd: Get word
-   buftx[3]:=2;
-   buftx[4]:=INA2XX_I2C_ADDR;
-   buftx[5]:= regnum;
-   if SendBlk then begin
-//     sleep(15);
-     if ReadBlk(buftx[2]) and (lenrx = 4) then begin
+   buftx[1]:=CMD_GET_REG; // Cmd: Get word
+//   buftx[3]:=2;
+   buftx[2]:=INA2XX_I2C_ADDR;
+   buftx[3]:= regnum;
+   if SendBlk(2) then begin
+     if ReadBlk(buftx[1]) and (lenrx = 4) then begin
         ina2xx_reg.w[i] := bufrx[3] or (bufrx[2] shl 8);
      end else begin
       result := false;
@@ -1009,11 +1189,9 @@ begin
    ft := Timer1.Enabled;
    Timer1.Enabled := False;
    result := true;
-   buftx[2]:=CMD_GET_STA; // Cmd: Get Status
-   buftx[3]:=0;
-   if SendBlk then begin
-//     sleep(15);
-     if ReadBlk(buftx[2]) and (lenrx = 8) then begin
+   buftx[1]:=CMD_GET_STA; // Cmd: Get Status
+   if SendBlk(0) then begin
+     if ReadBlk(buftx[1]) and (lenrx = 8) then begin
         dev_all_send_count :=  bufrx[0] or (bufrx[1] shl 8) or (bufrx[2] shl 16) or (bufrx[3] shl 24);
         dev_not_send_count :=  bufrx[4] or (bufrx[5] shl 8) or (bufrx[6] shl 16) or (bufrx[7] shl 24);
      end
@@ -1037,12 +1215,12 @@ begin
    ft := Timer1.Enabled;
    Timer1.Enabled := False;
    result := true;
-   buftx[2]:=CMD_GET_REG; // Cmd: Get word
-   buftx[3]:=2;
-   buftx[4]:=INA2XX_I2C_ADDR;
+   buftx[1]:=CMD_GET_REG; // Cmd: Get word
+
+   buftx[2]:=INA2XX_I2C_ADDR;
    for i:=0 to 7 do begin
-     buftx[5] := i;
-     if SendBlk and ReadBlk(buftx[2]) and (lenrx = 4) then begin
+     buftx[3] := i;
+     if SendBlk(2) and ReadBlk(buftx[1]) and (lenrx = 4) then begin
        ina2xx_reg.w[i] := bufrx[2] or (bufrx[3] shl 8);
      end
      else begin
@@ -1080,11 +1258,11 @@ begin
    end;
 end;
 
-procedure TfrmMain.AddCrfSamples(count : integer);
+procedure TfrmMain.AddCrfSamples;
 var
-i : integer;
 k, idx : double;
 flg : boolean;
+irx,itx : dword;
 begin
   if ChartEnables = CHART_UI_MASK then begin
     k := blk_cfg.time_us/500.0;
@@ -1098,17 +1276,20 @@ begin
     ShowLabelsMX;
     exit;
   end;
-  i := 0;
-  while(i < count) do begin
+  irx := ismprx and SMP_BUF_CNT;
+  itx := ismptx and SMP_BUF_CNT;
+  while(irx <> itx) do begin
     if (ChartEnables and CHART_I_MASK) <> 0 then begin
       OldCurI := CurI;
-      CurI := bufsmp[i]*Ik + I_zero;
-      Inc(i);
+      CurI := bufsmp[irx]*Ik + I_zero;
+      Inc(irx);
+      irx := irx and SMP_BUF_CNT;
     end;
     if (ChartEnables and CHART_U_MASK) <> 0 then begin
       OldCurU := CurU;
-      CurU := bufsmp[i]*Uk + U_zero;
-      Inc(i);
+      CurU := bufsmp[irx]*Uk + U_zero;
+      Inc(irx);
+      irx := irx and SMP_BUF_CNT;
     end;
     flg := True;
     if SamplesCount = 0 then begin
@@ -1193,124 +1374,25 @@ begin
           SamplesEna := False;
           Timer1.Enabled := False;
           PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-          while ReadGgfData do ;
-            PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
         end;
         SamplesAutoStop := True;
         break;
       end; // if idx >= MaxSamples
     end; // if flg
   end; // while(i < count)
+  ismprx := irx;
 end;
 
 
-function TfrmMain.SendBlk : boolean;
-begin
-   result := FALSE;
-   buftx[0]:=$55;
-   buftx[1]:=$55;
-   if not WriteCom(@buftx,buftx[3]+4) then begin
-    StatusBar.Panels[2].Text:='Ошибка записи в '+ sComNane+'!';
-    exit;
-   end;
-   sleep(20);
-   result := TRUE;
-end;
-
-function TfrmMain.ReadGgfData : boolean;
-var
-buf : array [0..3] of byte;
-begin
-    result := False;
-    while ReadCom(@buf,4) do begin // читаем заголовок
-      if(buf[0] = $55)
-      and (buf[1] = $55)
-//      and (buf[3] > 0)
-      and (buf[3] <= 60) then begin
-        // что-то есть
-        if ((buf[2] and $7f) = RES_OUT_REGS) then begin
-          // блок данных для графиков
-          if ((buf[2] and $80) = 0) then begin
-            if (buf[3] <> 0) then begin
-              if ReadCom(@bufsmp, buf[3]) then begin
-                if SamplesEna then AddCrfSamples(buf[3] div 2);
-              end else begin
-                if wait_cnt = 0 then PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-              end;
-            end;
-          end
-          else begin
-            // ошибки при чтении регистров по таймеру
-            if (buf[3] <> 0) then begin
-              if ReadCom(@bufrx, buf[3]) then begin
-                dev_all_send_count :=  bufrx[0] or (bufrx[1] shl 8) or (bufrx[2] shl 16) or (bufrx[3] shl 24);
-                dev_not_send_count :=  bufrx[4] or (bufrx[5] shl 8) or (bufrx[6] shl 16) or (bufrx[7] shl 24);
-                dev_send_err := bufrx[8];
-              end
-              else begin
-                if wait_cnt = 0 then PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-                dev_all_send_count := 0;
-                dev_not_send_count := 0;
-                dev_send_err := 255;
-              end;
-            end
-            else begin
-                if wait_cnt = 0 then PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-                dev_all_send_count := 0;
-                dev_not_send_count := 0;
-                dev_send_err := 254;
-             end;
-          end;
-        end else begin
-          // не $07
-          if (buf[3] <> 0) then begin
-            if not ReadCom(@bufrx, buf[3]) then begin
-              // не прочиталось - беда со связью?
-              PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
-            end
-          end;
-          if (wait_cnt > 0) then begin
-            //  ожидание ответа команде
-            if ((buf[2] and $7f) = wait_id) then begin
-              // ответ пришел
-              wait_cnt := 0;
-              lenrx := buf[3];
-              if ((buf[2] and $80) = 0) then
-                 result := True
-              else
-                 result := False;
-              exit;
-            end else begin
-              Inc(wait_cnt);
-              if wait_cnt < 33 then continue
-              else begin
-                // ответ не пришел
-                wait_cnt := 0;
-                lenrx := 0;
-                StatusBar.Panels[2].Text:='Нет ответа от устройства в '+ sComNane+'!';
-                exit;
-              end;
-            end;
-          end;
-        end;
-      end;
-    end;
-    wait_cnt := 0;
-end;
-
-function TfrmMain.ReadBlk(id : byte) : boolean;
-begin
-   wait_cnt := 1;
-   wait_id := id;
-   result := ReadGgfData;
-end;
 
 procedure TfrmMain.TimerTimer(Sender: TObject);
 var
  t : TDateTime;
 begin
-    ReadGgfData;
     if SamplesEna then begin
+      if ismptx <> ismprx then begin
+         AddCrfSamples();
+      end;
       if dev_send_err <> 0 then begin
         if not StopReadDevice then
           StatusBar.Panels[2].Text:='Ошибка передачи команды останова в устройство на '+ sComNane+'!'
@@ -1349,16 +1431,25 @@ begin
 end;
 
 procedure TfrmMain.ButtonClrGrfClick(Sender: TObject);
+var
+tmp1, tmp2 : boolean;
 begin
+    tmp1:=SamplesEna;
+    tmp2:=Timer1.Enabled;
     if flgComOpen then begin
+      SamplesEna := False;
+      Timer1.Enabled := False;
       PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
+      ismptx := 0;
+      ismprx := 0;
       ClearGrf;
       SetParStart;
       ConnectStartTime := GetTime;
+      SamplesEna:=tmp1;
+      Timer1.Enabled:=tmp2;
     end
     else
       ClearGrf;
-
 end;
 
 

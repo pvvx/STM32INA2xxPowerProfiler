@@ -64,7 +64,7 @@ type
     CheckBoxReset: TCheckBox;
     RadioGroupMode: TRadioGroup;
     ButtonOk: TButton;
-    ButtonCansel: TButton;
+    ButtonCancel: TButton;
     RadioGroupBusCTime: TRadioGroup;
     RadioGroupShuntCTime: TRadioGroup;
     RadioGroupAverageMode: TRadioGroup;

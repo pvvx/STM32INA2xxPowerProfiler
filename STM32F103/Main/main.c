@@ -39,39 +39,68 @@
 #include "smbus.h"
 
 /* Private typedef -----------------------------------------------------------*/
-typedef struct {
-	uint8_t dev_addr; //
-	uint8_t reg_addr; //
+
+#define DEV_I2C 0x55
+#define DEV_MCU 0xAA
+
+// DEV_I2C cmd:
+#define CMD_DI2C_VER  0x00 // Get Ver
+#define CMD_DI2C_CFG  0x01 // Get/Set CFG/ini & Start measure
+#define CMD_DI2C_SCF  0x02 // Store CFG/ini in Flash
+#define CMD_DI2C_STA  0x03 // Status
+#define CMD_DI2C_BLK  0x07 // blk out regs data
+#define CMD_DI2C_GRG  0x10 // Get reg
+#define CMD_DI2C_SRG  0x11 // Set reg
+#define CMD_DI2C_ALR  0x12 // Get SMBUS dev Alert addr (test)
+
+typedef __packed struct {
+	uint8_t dev_addr; // адрес на шине i2c
+	uint8_t reg_addr; // номер регистра чтения
 } reg_rd_t;
 
-typedef struct {
-	uint8_t dev_addr; //
-	uint8_t reg_addr; //
-	uint16_t data; //
+typedef __packed struct {
+	uint8_t dev_addr; // адрес на шине i2c
+	uint8_t reg_addr; // номер регистра чтения
+	uint16_t data; // значение для записи в регистр
 } reg_wr_t;
 
 #define MAX_INIT_REGS 4
 #define MAX_READ_REGS 4
-//#define wr_data_max ((VIRTUAL_COM_PORT_DATA_SIZE-sizeof(blk_head_t))/sizeof(int16_t))
 
-typedef struct {
-	uint8_t rd_count; // 1
-	uint8_t init_count; // 1
-	uint16_t time; // 2
-	uint16_t clk_khz; // 2
-	reg_wr_t init[MAX_INIT_REGS]; // (1+1+2)*4
-	reg_rd_t rd[MAX_READ_REGS]; // (1+1)*4
-} dev_cfg_t; // 6+16+8 [30]
+// Структура конфигурации опроса и инициализации устройства
+// Выходной пакет непрерывного опроса формируется по данному описанию
+typedef __packed struct {
+	uint8_t rd_count; // кол-во регистров для разового чтения
+	uint8_t init_count; // кол-во регистров для инициализации
+	uint16_t time; // частота опроса разового чтения
+	uint16_t clk_khz; // частота i2c шины
+	reg_wr_t init[MAX_INIT_REGS];
+	reg_rd_t rd[MAX_READ_REGS];
+} dev_cfg_t; 
 
-typedef struct {
-	uint16_t id; // = 0x5555
-	uint8_t cmd;	 // command
-	uint8_t size;	 // data size
+#define DEV_I2C 0x55
+#define DEV_MCU 0xAA
+
+// DEV_I2C cmd:
+#define CMD_DI2C_VER  0x00 // Get Ver
+#define CMD_DI2C_CFG  0x01 // Get/Set CFG/ini & Start measure
+#define CMD_DI2C_SCF  0x02 // Store CFG/ini in Flash
+#define CMD_DI2C_STA  0x03 // Status
+#define CMD_DI2C_BLK  0x07 // blk out regs data
+#define CMD_DI2C_GRG  0x10 // Get reg
+#define CMD_DI2C_SRG  0x11 // Set reg
+#define CMD_DI2C_ALR  0x12 // Get SMBUS dev Alert addr (test)
+//
+#define CMD_ERR_FLG   0x80 // send error cmd mask
+//
+typedef  __packed struct{
+	uint8_t id;	// номер устройства
+	uint8_t cmd; // номер команды / тип пакета
 } blk_head_t;
-
-typedef struct {
+	
+typedef  __packed struct _blk_cio_t{
 	blk_head_t head;
-	union {
+	__packed union {
 		uint8_t uc[VIRTUAL_COM_PORT_DATA_SIZE-sizeof(blk_head_t)];
 		int8_t sc[VIRTUAL_COM_PORT_DATA_SIZE-sizeof(blk_head_t)];
 		uint16_t ui[(VIRTUAL_COM_PORT_DATA_SIZE-sizeof(blk_head_t))/sizeof(uint16_t)];
@@ -84,6 +113,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 #define Timer_SetPreriod_us(x)	TIM2->ARR = x-1 /* Set the Autoreload value */
+#define Timer_Stop()		TIM_Cmd(TIM2, DISABLE);
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 dev_cfg_t cfg_ini;
@@ -99,6 +129,7 @@ uint8_t rd_next_cnt;
 uint8_t wr_data_cnt;
 uint8_t wr_data_max;
 uint8_t send_err = 0;
+uint8_t send_regs_size;
 
 volatile uint32_t packet_sent = 1;
 volatile uint32_t packet_receive = 1;
@@ -166,7 +197,7 @@ void GetNewRegData(void) {
 		rd_next_cnt = 0;
 	raddr = &cfg_ini.rd[rd_next_cnt];
 	rd_next_cnt++;
-	if (SMBusReadWord(raddr->dev_addr, &p->data.ui[wr_data_cnt],
+	if (SMBusReadWord(raddr->dev_addr, (uint16_t *)&p->data.ui[wr_data_cnt],
 				raddr->reg_addr)) {
 		all_send_count++;			
 		wr_data_cnt++;
@@ -180,14 +211,14 @@ void GetNewRegData(void) {
 			else {
 				++not_send_count;
 				if (not_send_count > 10) { 
-					TIM_Cmd(TIM2, DISABLE);
+					Timer_Stop();
 					send_err = 1;
 				}
 			}
 		}
 	}
 	else {
-		TIM_Cmd(TIM2, DISABLE);		
+		Timer_Stop();
 		send_err = 2;
 	}
 }
@@ -215,7 +246,7 @@ uint8_t InitExtDevice(void) {
 	if (cfg_ini.rd_count == 0 || cfg_ini.time < tmp) {
 		cfg_ini.rd_count = 0;
 		wr_data_max = 0; // MAX_READ_REGS*2;
-		TIM_Cmd(TIM2, DISABLE);
+		Timer_Stop();
 		if (cfg_ini.time < tmp) {
 //			not_send_count = 0xfffffffe;
 			return 0;
@@ -224,7 +255,7 @@ uint8_t InitExtDevice(void) {
 		Timer_Init(cfg_ini.time);
 		wr_data_max = (((VIRTUAL_COM_PORT_DATA_SIZE - sizeof(blk_head_t) - 1)/sizeof(int16_t))/cfg_ini.rd_count) * cfg_ini.rd_count;
 	}
-	Send_BufferO.head.size = Send_Buffer1.head.size = wr_data_max * 2;
+	send_regs_size = wr_data_max * 2 + sizeof(blk_head_t);
 	not_send_count = 0;
 	all_send_count = 0;
 	if (cfg_ini.init_count > MAX_INIT_REGS) cfg_ini.init_count = 0;
@@ -248,10 +279,10 @@ int main(void) {
 	USB_Interrupts_Config();
 	USB_Init();
 // Buf Send data Init
-	Send_Buffer1.head.id = 0x5555;
-	Send_Buffer1.head.cmd = 0x07;
-	Send_BufferO.head.id = 0x5555;
-	Send_BufferO.head.cmd = 0x07;
+	Send_Buffer1.head.id = DEV_I2C;
+	Send_Buffer1.head.cmd = CMD_DI2C_BLK;
+	Send_BufferO.head.id = DEV_I2C;
+	Send_BufferO.head.cmd = CMD_DI2C_BLK;
 	Delay_ms(75); // Wait stabilization power voltage
 // CFG Init
 	if (!ReadIniBlk(&cfg_ini, sizeof(cfg_ini))) {
@@ -268,111 +299,95 @@ int main(void) {
 			if (Receive_length >= sizeof(blk_head_t)) {
 				if (packet_sent == 1) {
 				    blk_cio_t * pbufi = (blk_cio_t *) Receive_Buffer;
-					if (pbufi->head.id == 0x5555 
-					&& Receive_length >= pbufi->head.size + sizeof(blk_head_t)) {
+					if (pbufi->head.id == DEV_I2C) {
 						switch (pbufi->head.cmd) {
-						case 0x00: // Get Ver
-							pbufi->data.ud[0] = 0x0110005; // DevID = 0x11, Ver 0.0.0.3 = 0x00002
-							pbufi->head.size = 4;
+						case CMD_DI2C_VER: // Get Ver
+							pbufi->data.ui[0] = 0x0015; // DevID = 0x0015
+							pbufi->data.ui[1] = 0x0006; // Ver 0.0.0.6 = 0x0006
 							Receive_length = 4 + sizeof(blk_head_t);
 							break;
-						case 0x01: // Get/Set CFG/ini & Start measure
-							if (pbufi->head.size != 0) {
+						case CMD_DI2C_CFG: // Get/Set CFG/ini & Start measure
+							if (Receive_length > sizeof(blk_head_t)) {
 								timer_flg = 0;
 								memcpy2(&cfg_ini, &pbufi->data,
-									(pbufi->head.size > sizeof(cfg_ini))? sizeof(cfg_ini) : pbufi->head.size);
+									(Receive_length > sizeof(cfg_ini) + sizeof(blk_head_t))? sizeof(cfg_ini) : Receive_length - sizeof(blk_head_t));
 								if (!InitExtDevice()) {
 									timer_flg = 1;
-									pbufi->head.cmd |= 0x80; // Error cmd
-									pbufi->head.size = 0;
+									pbufi->head.cmd |= CMD_ERR_FLG; // Error cmd
 									Receive_length = 0 + sizeof(blk_head_t);
 									break;
 								}
 								timer_flg = 1;
 							} 
 							memcpy2(&pbufi->data, &cfg_ini, sizeof(cfg_ini));
-							pbufi->head.size = sizeof(cfg_ini);
 							Receive_length = sizeof(cfg_ini) + sizeof(blk_head_t);
 							break;
-						case 0x02: // Store CFG/ini in Flash
+						case CMD_DI2C_SCF: // Store CFG/ini in Flash
 							WriteIniBlk(&cfg_ini, sizeof(cfg_ini));
-							pbufi->head.size = 0;
 							Receive_length = sizeof(blk_head_t);
 							break;
-						case 0x03: // Status
+						case CMD_DI2C_STA: // Status
 							pbufi->data.ud[0] = all_send_count;
 							pbufi->data.ud[1] = not_send_count;
-							pbufi->head.size = 8;
 							Receive_length = 8 + sizeof(blk_head_t);
 							break;
 						//-------
-						case 0x10: // Get reg
+						case CMD_DI2C_GRG: // Get reg
 							timer_flg = 0;
 							if (SMBusReadWord(pbufi->data.reg.dev_addr,
-								&pbufi->data.reg.data, pbufi->data.reg.reg_addr)) {
+								(uint16_t *)&pbufi->data.reg.data, pbufi->data.reg.reg_addr)) {
 								timer_flg = 1;
-								pbufi->head.size = sizeof(reg_wr_t);
 								Receive_length = sizeof(reg_wr_t) + sizeof(blk_head_t);
 							} else {
 								timer_flg = 1;
-								pbufi->head.cmd |= 0x80; // Error cmd
-								pbufi->head.size = 0;
+								pbufi->head.cmd |= CMD_ERR_FLG; // Error cmd
 								Receive_length = 0 + sizeof(blk_head_t);
 							};
 							break;
-						case 0x11: // Set reg
+						case CMD_DI2C_SRG: // Set reg
 							timer_flg = 0;
 							if (SMBusWriteWord(pbufi->data.reg.dev_addr,
 								pbufi->data.reg.data, pbufi->data.reg.reg_addr)) {
 								timer_flg = 1;
-								pbufi->head.size = sizeof(reg_wr_t);
 								Receive_length = sizeof(reg_wr_t) + sizeof(blk_head_t);
 							} else {
 								timer_flg = 1;
-								pbufi->head.cmd |= 0x80; // Error cmd
-								pbufi->head.size = 0;
+								pbufi->head.cmd |= CMD_ERR_FLG; // Error cmd
 								Receive_length = 0 + sizeof(blk_head_t);
 							};
 							break;
-						case 0x12: // Get SMBUS dev Alert addr
+						case CMD_DI2C_ALR: // Get SMBUS dev Alert addr
 							timer_flg = 0;
 							if (SMBusReadAlert(&pbufi->data.reg.dev_addr)) {
 								timer_flg = 1;
-								pbufi->head.size = 1;
 								Receive_length = 1 + sizeof(blk_head_t);
 							} else {
 								timer_flg = 1;
-								pbufi->head.cmd |= 0x80; // Error cmd
-								pbufi->head.size = 0;
+								pbufi->head.cmd |= CMD_ERR_FLG; // Error cmd
 								Receive_length = 0 + sizeof(blk_head_t);
 							}
 							break;
 						default:
-							pbufi->head.cmd |= 0x80; // Error cmd
-							pbufi->head.size = 0;
+							pbufi->head.cmd |= CMD_ERR_FLG; // Error cmd
 							Receive_length = 0 + sizeof(blk_head_t);
 							break;
 						};
-					}  else if (Receive_Buffer[0] == 0x55) {
-						if(Receive_Buffer[0] == 0x7f) {
+					}  else if (pbufi->head.id == DEV_MCU) {
+						if(pbufi->head.cmd == 0x7f) {
 							// Get version functions GPIO
-							Receive_Buffer[2] = 0x00; // version hi
-							Receive_Buffer[3] = 0x02; // version lo
+							pbufi->data.ui[0] = 0x0002; // revision
 							reg = GPIOA->IDR;
-							Receive_Buffer[4] = reg >> 8;	// PA8..15
-							Receive_Buffer[5] = reg;		// PA0..7
+							pbufi->data.ui[1] = reg;	// PA0..15
 							reg = GPIOB->IDR;   
-							Receive_Buffer[6] = reg >> 8;	// PB8..15
-							Receive_Buffer[7] = reg;		// PB0..7
+							pbufi->data.ui[2] = reg;	// PB0..15
 							reg = GPIOC->IDR;
-							Receive_Buffer[8] = reg >> 8;  // PC8..15 (STM32F103C8 only PC13..15)
-							Receive_Buffer[9] = reg;		// PC0..7
-							Receive_length = 10;
+							pbufi->data.ui[3] = reg;    // PC0..15 (STM32F103C8 only PC13..15)
+							Receive_length = 8 + sizeof(blk_head_t);
 						} 
-						else if (Receive_length == 6) {
+						else if (Receive_length == sizeof(uint32_t) + sizeof(blk_head_t)) {
 							// Set/Res GPIO
-							reg = (Receive_Buffer[2]<<24) | (Receive_Buffer[3]<<16) | (Receive_Buffer[4]<<8) | Receive_Buffer[5];
-							switch(Receive_Buffer[1]) {
+							reg = pbufi->data.ud[0];
+							switch(pbufi->head.cmd) {
 							case 0x10: 
 								GPIOA->BSRR = reg;
 								reg = GPIOA->ODR;
@@ -436,12 +451,9 @@ int main(void) {
 								reg = GPIOC->CRH;
 								break;
 							default:
-								Receive_Buffer[1] |= 0x80;
+								pbufi->head.cmd |= CMD_ERR_FLG;
 							}
-							Receive_Buffer[2] = reg >> 24;
-							Receive_Buffer[3] = reg >> 16;
-							Receive_Buffer[4] = reg >> 8;
-							Receive_Buffer[5] = reg;
+							pbufi->data.ud[0] = reg;
 						}
 				    }
 					CDC_Send_DATA((uint8_t *) Receive_Buffer, Receive_length);
@@ -450,16 +462,15 @@ int main(void) {
 			}
 			else if (packet_sent == 1){
 				if (Send_Flg) {
-					CDC_Send_DATA((uint8_t *)&Send_BufferO, Send_BufferO.head.size + sizeof(blk_head_t));
+					CDC_Send_DATA((uint8_t *)&Send_BufferO, send_regs_size);
 					Send_Flg = 0;
 				} else if (send_err) {
-					Send_BufferO.head.cmd = 0x87;
-					Send_BufferO.head.size = 9;
+					Send_BufferO.head.cmd = CMD_DI2C_BLK | CMD_ERR_FLG;
 					Send_BufferO.data.ud[0]	= all_send_count;
 					Send_BufferO.data.ud[1] = not_send_count;
 					Send_BufferO.data.uc[8] = send_err;
 					CDC_Send_DATA((uint8_t *)&Send_BufferO, 9 + sizeof(blk_head_t));
-					Send_BufferO.head.cmd = 0x07;
+					Send_BufferO.head.cmd = CMD_DI2C_BLK;
 					send_err = 0;
 				};
 			};

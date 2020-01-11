@@ -73,7 +73,7 @@ begin
     if SetComDCB then begin
      ComTimeouts.ReadIntervalTimeout:=1; //20
      ComTimeouts.ReadTotalTimeoutMultiplier:=1; //0
-     ComTimeouts.ReadTotalTimeoutConstant:=5; //200
+     ComTimeouts.ReadTotalTimeoutConstant:=0; //200
      ComTimeouts.WriteTotalTimeoutMultiplier := 0;//MAXDWORD;
      ComTimeouts.WriteTotalTimeoutConstant:= 0;//MAXDWORD;
      SetComTimeouts;
@@ -205,8 +205,9 @@ begin
 //     exit;
    end;
   end;
-  if rxLen = BufLen then result := True
-  else ClearCommError(hCom,dErr,Nil);
+  if(rxLen >= 2) then
+  result := True
+//  else ClearCommError(hCom,dErr,Nil);
  end;
 end;
 
