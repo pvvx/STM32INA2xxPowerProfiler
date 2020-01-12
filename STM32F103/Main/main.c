@@ -94,8 +94,8 @@ typedef __packed struct {
 #define CMD_ERR_FLG   0x80 // send error cmd mask
 //
 typedef  __packed struct{
-	uint8_t id;	// номер устройства
-	uint8_t cmd; // номер команды / тип пакета
+	uint8_t size; // размер пакета
+	uint8_t cmd;  // номер команды / тип пакета
 } blk_head_t;
 	
 typedef  __packed struct _blk_cio_t{
@@ -129,7 +129,6 @@ uint8_t rd_next_cnt;
 uint8_t wr_data_cnt;
 uint8_t wr_data_max;
 uint8_t send_err = 0;
-uint8_t send_regs_size;
 
 volatile uint32_t packet_sent = 1;
 volatile uint32_t packet_receive = 1;
@@ -205,7 +204,7 @@ void GetNewRegData(void) {
 			wr_data_cnt = 0;
 			rd_next_cnt = 0;
 			if(Send_Flg == 0) {
-				memcpy2(&Send_BufferO.data, &Send_Buffer1.data, sizeof(Send_BufferO.data));
+				memcpy2(&Send_BufferO, &Send_Buffer1, sizeof(Send_BufferO));
 				Send_Flg = 1;
 			}
 			else {
@@ -255,7 +254,10 @@ uint8_t InitExtDevice(void) {
 		Timer_Init(cfg_ini.time);
 		wr_data_max = (((VIRTUAL_COM_PORT_DATA_SIZE - sizeof(blk_head_t) - 1)/sizeof(int16_t))/cfg_ini.rd_count) * cfg_ini.rd_count;
 	}
-	send_regs_size = wr_data_max * 2 + sizeof(blk_head_t);
+	// Buf Send data Init
+	Send_Buffer1.head.size = wr_data_max * 2;
+	Send_Buffer1.head.cmd = CMD_DI2C_BLK;
+	
 	not_send_count = 0;
 	all_send_count = 0;
 	if (cfg_ini.init_count > MAX_INIT_REGS) cfg_ini.init_count = 0;
@@ -272,17 +274,11 @@ uint8_t InitExtDevice(void) {
  * Return		 : None.
  *******************************************************************************/
 int main(void) {
-	uint32_t reg;
 	Set_System(); // in hw_config.c
 // USB Init
 	Set_USBClock();
 	USB_Interrupts_Config();
 	USB_Init();
-// Buf Send data Init
-	Send_Buffer1.head.id = DEV_I2C;
-	Send_Buffer1.head.cmd = CMD_DI2C_BLK;
-	Send_BufferO.head.id = DEV_I2C;
-	Send_BufferO.head.cmd = CMD_DI2C_BLK;
 	Delay_ms(75); // Wait stabilization power voltage
 // CFG Init
 	if (!ReadIniBlk(&cfg_ini, sizeof(cfg_ini))) {
@@ -299,7 +295,7 @@ int main(void) {
 			if (Receive_length >= sizeof(blk_head_t)) {
 				if (packet_sent == 1) {
 				    blk_cio_t * pbufi = (blk_cio_t *) Receive_Buffer;
-					if (pbufi->head.id == DEV_I2C) {
+					if (Receive_length >= pbufi->head.size + sizeof(blk_head_t)) {
 						switch (pbufi->head.cmd) {
 						case CMD_DI2C_VER: // Get Ver
 							pbufi->data.ui[0] = 0x0015; // DevID = 0x0015
@@ -307,10 +303,10 @@ int main(void) {
 							Receive_length = 4 + sizeof(blk_head_t);
 							break;
 						case CMD_DI2C_CFG: // Get/Set CFG/ini & Start measure
-							if (Receive_length > sizeof(blk_head_t)) {
+							if (pbufi->head.size) {
 								timer_flg = 0;
 								memcpy2(&cfg_ini, &pbufi->data,
-									(Receive_length > sizeof(cfg_ini) + sizeof(blk_head_t))? sizeof(cfg_ini) : Receive_length - sizeof(blk_head_t));
+									(pbufi->head.size > sizeof(cfg_ini))? sizeof(cfg_ini) : pbufi->head.size);
 								if (!InitExtDevice()) {
 									timer_flg = 1;
 									pbufi->head.cmd |= CMD_ERR_FLG; // Error cmd
@@ -329,7 +325,7 @@ int main(void) {
 						case CMD_DI2C_STA: // Status
 							pbufi->data.ud[0] = all_send_count;
 							pbufi->data.ud[1] = not_send_count;
-							Receive_length = 8 + sizeof(blk_head_t);
+							Receive_length = sizeof(pbufi->data.ud[0]) + sizeof(pbufi->data.ud[1]) + sizeof(blk_head_t);
 							break;
 						//-------
 						case CMD_DI2C_GRG: // Get reg
@@ -372,105 +368,23 @@ int main(void) {
 							Receive_length = 0 + sizeof(blk_head_t);
 							break;
 						};
-					}  else if (pbufi->head.id == DEV_MCU) {
-						if(pbufi->head.cmd == 0x7f) {
-							// Get version functions GPIO
-							pbufi->data.ui[0] = 0x0002; // revision
-							reg = GPIOA->IDR;
-							pbufi->data.ui[1] = reg;	// PA0..15
-							reg = GPIOB->IDR;   
-							pbufi->data.ui[2] = reg;	// PB0..15
-							reg = GPIOC->IDR;
-							pbufi->data.ui[3] = reg;    // PC0..15 (STM32F103C8 only PC13..15)
-							Receive_length = 8 + sizeof(blk_head_t);
-						} 
-						else if (Receive_length == sizeof(uint32_t) + sizeof(blk_head_t)) {
-							// Set/Res GPIO
-							reg = pbufi->data.ud[0];
-							switch(pbufi->head.cmd) {
-							case 0x10: 
-								GPIOA->BSRR = reg;
-								reg = GPIOA->ODR;
-								break;
-							case 0x11: 
-								GPIOB->BSRR = reg;
-								reg = GPIOB->ODR;
-								break;
-							case 0x12: 
-								GPIOC->BSRR = reg;
-								reg = GPIOC->ODR;
-								break;
-							
-							case 0x20: 
-								GPIOA->CRL &= reg;
-								reg = GPIOA->CRL;
-								break;
-							case 0x21: 
-								GPIOA->CRH &= reg;
-								reg = GPIOA->CRH;
-								break;
-							case 0x22: 
-								GPIOB->CRL &= reg;
-								reg = GPIOB->CRL;
-								break;
-							case 0x23: 
-								GPIOB->CRH &= reg;
-								reg = GPIOB->CRH;
-								break;
-							case 0x24: 
-								GPIOC->CRL &= reg;
-								reg = GPIOC->CRL;
-								break;
-							case 0x25: 
-								GPIOC->CRH &= reg;
-								reg = GPIOC->CRH;
-								break;
-	
-							case 0x30: 
-								GPIOA->CRL |= reg;
-								reg = GPIOA->CRL;
-								break;
-							case 0x31: 
-								GPIOA->CRH |= reg;
-								reg = GPIOA->CRH;
-								break;
-							case 0x32: 
-								GPIOB->CRL |= reg;
-								reg = GPIOB->CRL;
-								break;
-							case 0x33: 
-								GPIOB->CRH |= reg;
-								reg = GPIOB->CRH;
-								break;
-							case 0x34: 
-								GPIOC->CRL |= reg;
-								reg = GPIOC->CRL;
-								break;
-							case 0x35: 
-								GPIOC->CRH |= reg;
-								reg = GPIOC->CRH;
-								break;
-							default:
-								pbufi->head.cmd |= CMD_ERR_FLG;
-							}
-							pbufi->data.ud[0] = reg;
-						}
-				    }
-					CDC_Send_DATA((uint8_t *) Receive_Buffer, Receive_length);
+						pbufi->head.size = Receive_length - sizeof(blk_head_t);
+						CDC_Send_DATA((uint8_t *) Receive_Buffer, Receive_length);
+					}
+					Receive_length = 0;
 				};
-				Receive_length = 0;
 			}
 			else if (packet_sent == 1){
 				if (Send_Flg) {
-					CDC_Send_DATA((uint8_t *)&Send_BufferO, send_regs_size);
+					CDC_Send_DATA((uint8_t *)&Send_BufferO, Send_BufferO.head.size + sizeof(blk_head_t));
 					Send_Flg = 0;
 				} else if (send_err) {
 					Send_BufferO.head.cmd = CMD_DI2C_BLK | CMD_ERR_FLG;
+					Send_BufferO.head.size = 9;
 					Send_BufferO.data.ud[0]	= all_send_count;
 					Send_BufferO.data.ud[1] = not_send_count;
 					Send_BufferO.data.uc[8] = send_err;
 					CDC_Send_DATA((uint8_t *)&Send_BufferO, 9 + sizeof(blk_head_t));
-					Send_BufferO.head.cmd = CMD_DI2C_BLK;
 					send_err = 0;
 				};
 			};

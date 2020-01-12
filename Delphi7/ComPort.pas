@@ -49,7 +49,7 @@ function GetComStat : boolean;
 function PurgeCom(mode:Dword): boolean;
 function WriteComStr(S: String): boolean;
 function ChangeComSpeed(Baud:integer) : boolean;
-function SetComBufs  : boolean;
+function SetComBufs : boolean;
 
 implementation
 
@@ -72,8 +72,8 @@ begin
     DCB.BaudRate := iComBaud;
     if SetComDCB then begin
      ComTimeouts.ReadIntervalTimeout:=1; //20
-     ComTimeouts.ReadTotalTimeoutMultiplier:=1; //0
-     ComTimeouts.ReadTotalTimeoutConstant:=0; //200
+     ComTimeouts.ReadTotalTimeoutMultiplier:=0; //0
+     ComTimeouts.ReadTotalTimeoutConstant:=1; //200
      ComTimeouts.WriteTotalTimeoutMultiplier := 0;//MAXDWORD;
      ComTimeouts.WriteTotalTimeoutConstant:= 0;//MAXDWORD;
      SetComTimeouts;

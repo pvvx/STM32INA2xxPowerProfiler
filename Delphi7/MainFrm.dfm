@@ -1,6 +1,6 @@
 object frmMain: TfrmMain
-  Left = 1273
-  Top = 204
+  Left = 1410
+  Top = 167
   Width = 1139
   Height = 648
   Color = clBtnFace
@@ -385,6 +385,15 @@ object frmMain: TfrmMain
       TabOrder = 13
       Text = '1.0'
       OnExit = CheckBoxTrigerClick
+    end
+    object Button1: TButton
+      Left = 672
+      Top = 8
+      Width = 75
+      Height = 25
+      Caption = 'Button1'
+      TabOrder = 14
+      OnClick = Button1Click
     end
   end
   object Chart: TChart
