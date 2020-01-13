@@ -70,10 +70,12 @@ typedef __packed struct {
 // Структура конфигурации опроса и инициализации устройства
 // Выходной пакет непрерывного опроса формируется по данному описанию
 typedef __packed struct {
-	uint8_t rd_count; // кол-во регистров для разового чтения
+	uint8_t rd_count; 	// кол-во регистров для разового чтения
 	uint8_t init_count; // кол-во регистров для инициализации
-	uint16_t time; // частота опроса разового чтения
-	uint16_t clk_khz; // частота i2c шины
+	uint8_t multiplier; // множитель периода опроса, time << multiplier
+	uint8_t pktcnt;  	// кол-во передаваемых значений из регистров в одном пакете передачи 
+	uint16_t time; 		// период опроса регистров чтения в us 
+	uint16_t clk_khz; 	// частота i2c шины
 	reg_wr_t init[MAX_INIT_REGS];
 	reg_rd_t rd[MAX_READ_REGS];
 } dev_cfg_t; 
@@ -154,7 +156,7 @@ void *memcpy2(void *dest, void *src, uint16_t len) {
  * Output		 : None.
  * Return		 : None.
  *******************************************************************************/
-void Timer_Init(uint16_t period_us) {
+void Timer_Init(uint16_t period_us, uint16_t multiplier) {
 	TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;
 	NVIC_InitTypeDef NVIC_InitStructure;
 
@@ -170,7 +172,7 @@ void Timer_Init(uint16_t period_us) {
 
 	/* Time base configuration */
 	TIM_TimeBaseStructure.TIM_Period = period_us - 1;// 1 MHz down to 10 KHz (100 us)
-	TIM_TimeBaseStructure.TIM_Prescaler = 72 - 1; // 72 MHz Clock down to 1 MHz (adjust per your clock)
+	TIM_TimeBaseStructure.TIM_Prescaler = (72 << multiplier) - 1; // 72 MHz Clock down to 1 MHz (adjust per your clock)
 	TIM_TimeBaseStructure.TIM_ClockDivision = 0;
 	TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;
 	TIM_TimeBaseInit(TIM2, &TIM_TimeBaseStructure);
@@ -251,10 +253,13 @@ uint8_t InitExtDevice(void) {
 			return 0;
 		}
 	} else {
-		Timer_Init(cfg_ini.time);
+		Timer_Init(cfg_ini.time, cfg_ini.multiplier);
 		wr_data_max = (((VIRTUAL_COM_PORT_DATA_SIZE - sizeof(blk_head_t) - 1)/sizeof(int16_t))/cfg_ini.rd_count) * cfg_ini.rd_count;
+		if(cfg_ini.pktcnt != 0 && cfg_ini.pktcnt <= wr_data_max)
+			wr_data_max = cfg_ini.pktcnt;
 	}
 	// Buf Send data Init
+	
 	Send_Buffer1.head.size = wr_data_max * 2;
 	Send_Buffer1.head.cmd = CMD_DI2C_BLK;
 	
@@ -284,8 +289,10 @@ int main(void) {
 	if (!ReadIniBlk(&cfg_ini, sizeof(cfg_ini))) {
 		cfg_ini.rd_count = 0;
 		cfg_ini.init_count = 0;
-		cfg_ini.clk_khz = 400;
 		cfg_ini.time = 400;
+		cfg_ini.multiplier = 0;
+		cfg_ini.clk_khz = 400;
+		cfg_ini.pktcnt = 30;
 	}
 	InitExtDevice();
 	while (1) {
@@ -298,7 +305,7 @@ int main(void) {
 					if (Receive_length >= pbufi->head.size + sizeof(blk_head_t)) {
 						switch (pbufi->head.cmd) {
 						case CMD_DI2C_VER: // Get Ver
-							pbufi->data.ui[0] = 0x0015; // DevID = 0x0015
+							pbufi->data.ui[0] = 0x0016; // DevID = 0x0016
 							pbufi->data.ui[1] = 0x0006; // Ver 0.0.0.6 = 0x0006
 							Receive_length = 4 + sizeof(blk_head_t);
 							break;

@@ -73,10 +73,10 @@ var
     $0040, $0048, $0050, $0058,
     $0060, $0068, $0070, $0078 );
 
-  TabTimerResolution : array [0..ShuntADCResolutionCnt-1] of word =
+  TabTimerResolution : array [0..ShuntADCResolutionCnt-1] of dword =
    (84, 148, 276, 532,
     532, 1006, 2130, 4260,
-    8510, 17020, 34050, 34050);
+    8510, 17020, 34050, 68100);
 
   TabBusClkResolution : array [0..ShuntADCResolutionCnt-1] of word =
    (1000, 800, 800, 800,
@@ -226,6 +226,7 @@ function TForm219Config.DevIniCfg(mode : integer) : byte;
 var
   mask : word;
   u, i : word;
+  t, x : dword;
 begin
      mask := ina2xx_reg.config and BusADCResolutionMsk;
      for u:=0 to BusADCResolutionCnt do begin
@@ -261,7 +262,9 @@ begin
              if(mode <> 0) then blk_cfg.rd_count := 1;
              blk_cfg.data[0].reg_addr := 1;
              blk_cfg.data[1].reg_addr := 1;
-             blk_cfg.time_us := TabTimerResolution[i];
+             t := TabTimerResolution[i];
+//             blk_cfg.time_us := ;
+//             blk_cfg.multiplier := 0;
             end;
          6 : begin // Bus
              result := CHART_U_MASK;
@@ -269,22 +272,41 @@ begin
              if(mode <> 0) then blk_cfg.rd_count := 1;
              blk_cfg.data[0].reg_addr := 2;
              blk_cfg.data[1].reg_addr := 2;
-             blk_cfg.time_us := TabTimerResolution[u];
+             t := TabTimerResolution[u];
+//             blk_cfg.time_us := TabTimerResolution[u];
+//             blk_cfg.multiplier := 0;
             end;
          7 : begin // Shunt + Bus
              result := CHART_UI_MASK;
              if(mode <> 0) then blk_cfg.rd_count := 2;
              blk_cfg.data[0].reg_addr := 1;
              blk_cfg.data[1].reg_addr := 2;
-             blk_cfg.time_us := (TabTimerResolution[i] + TabTimerResolution[u]) div 2;
-             if i < u then i := u;
+             t := (TabTimerResolution[i] + TabTimerResolution[u]) div 2;
+//             blk_cfg.time_us := ;
+//             blk_cfg.multiplier := 0;
+//             if i < u then i := u;
             end;
          else begin
             result := 0;
             blk_cfg.rd_count := 0;
-            blk_cfg.time_us := 1000;
+            t := 10000;
             end;
       end;
+     // задать максимум регистров в пакете
+     x := t div (30000 div 30);
+     if(x > 29) then x := 29;
+     if mask = 7 then x := x and $fffe;
+     blk_cfg.pktcnt := 30 - x;
+     // задать паузу опроса регистров
+     x := 0;
+     while t > $ffff do begin
+        t := t shr 1;
+        x := x + 1;
+     end;
+     blk_cfg.time_us := t;
+     blk_cfg.multiplier := x;
+     // задать максимум регистров в пакете
+     blk_cfg.pktcnt := 30;
 {
       if (blk_cfg.clk_khz < SMBus_219_Speed_Min_kHz)
       or (blk_cfg.clk_khz > SMBus_219_Speed_Max_kHz) then

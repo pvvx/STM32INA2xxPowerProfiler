@@ -15,7 +15,7 @@ const
 //    WM_NEW_ADC_BLK = WM_USER+2;
 
     INA2XX_I2C_ADDR = $80;
-    STM32_DEVICE_ID = $15;
+    STM32_DEVICE_ID = $16;
     INA226_MID_REG = $fe;
     INA226_DID_REG = $ff;
     INA226_MID = $4954;
@@ -80,8 +80,10 @@ type
   ina2xx_cfg_t = packed record
       rd_count    : byte; // старший бaйт = кол-ву regs init, младший = кол-ву regs чтени€
       wr_count    : byte; // старший бaйт = кол-ву regs init, младший = кол-ву regs чтени€
-      time_us     : word;
-      clk_khz     : word;
+	    multiplier  : byte; // множитель периода опроса  time_us << multiplier
+	    pktcnt      : byte; // кол-во передаваемых значений из регистров в одном пакете передачи
+      time_us     : word; // период опроса регистров чтени€ в us
+	    clk_khz     : word; 	// частота i2c шины к√ц
       init        : array [0..3] of ina2xx_rwr_t;
       data        : array [0..3] of ina2xx_rrd_t;
   end;
@@ -861,13 +863,15 @@ end;
 procedure TfrmMain.ShowSmps;
 var
 k : double;
+t : dword;
 begin
-  if blk_cfg.time_us <> 0 then begin
+  t := blk_cfg.time_us shl blk_cfg.multiplier;
+  if t <> 0 then begin
     if ChartEnables = CHART_UI_MASK then begin
-      k := 2000000.0/blk_cfg.time_us;
+      k := 2000000.0/t;
     end
     else begin
-      k := 1000000.0/blk_cfg.time_us;
+      k := 1000000.0/t;
     end;
     StatusBar.Panels[1].Text := FormatFloat('# ##0.0', k) + ' sps';
   end;
@@ -891,6 +895,7 @@ begin
   dev_send_err := 0;
   ChartEnables := 0;
   blk_cfg.clk_khz := SMBus_Speed_kHz;
+  blk_cfg.multiplier := 0;
 
   GetScrParms;
 
@@ -1167,15 +1172,9 @@ begin
     purge_com := 1;
 
     buftx[1]:=CMD_SET_INI; // Set/Get CFG/ini & Start measure
-
     buftx[2]:=0; // read regs = 0
-    buftx[3]:=0; // write regs = 0
-    buftx[4]:=$90; // 400
-    buftx[5]:=$01; //
-    buftx[6]:=$90; // 400
-    buftx[7]:=$01; //
 
-    if SendBlk(6) then begin
+    if SendBlk(1) then begin
       if ReadBlk(buftx[1]) and (lenrx = SizeOf(blk_cfg)) then begin
         move(bufrx, blk_cfg, SizeOf(blk_cfg));
         sleep(10);
@@ -1357,13 +1356,14 @@ procedure TfrmMain.AddCrfSamples;
 var
 k, idx : double;
 flg : boolean;
-irx,itx : dword;
+t, irx,itx : dword;
 begin
+  t := blk_cfg.time_us shl blk_cfg.multiplier;
   if ChartEnables = CHART_UI_MASK then begin
-    k := blk_cfg.time_us/500.0;
+    k := t/500.0;
   end
   else begin
-    k := blk_cfg.time_us/1000.0;
+    k := t/1000.0;
   end;
   idx := SamplesCount*k;
   if idx >= MaxSamples then begin

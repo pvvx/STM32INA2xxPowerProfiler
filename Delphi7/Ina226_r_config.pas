@@ -309,10 +309,10 @@ begin
      i := (ina2xx_reg.config and ShuntCTimeMsk) shr ShuntCTimeShl;
      i := TabTimerCTime[i];
      x := (ina2xx_reg.config and AveragingModeMsk) shr AveragingModeShl;
-     u := u shl (x * 2);
-     i := i shl (x * 2);
-     while (u > $ffff) do u := u shr 1;
-     while (i > $ffff) do i := i shr 1;
+//     u := u shl (x * 2);
+//     i := i shl (x * 2);
+//     while (u > $ffff) do u := u shr 1;
+//     while (i > $ffff) do i := i shr 1;
      mask := ina2xx_reg.config and ConfigModeMsk;
      // задать адреса регистров чтения
      case mask of
@@ -322,6 +322,7 @@ begin
              blk_cfg.data[0].reg_addr := 1;
              blk_cfg.data[1].reg_addr := 1;
              blk_cfg.time_us := i;
+             blk_cfg.multiplier := x;
             end;
          6 : begin // Bus
              result := CHART_U_MASK;
@@ -330,6 +331,7 @@ begin
              blk_cfg.data[0].reg_addr := 2;
              blk_cfg.data[1].reg_addr := 2;
              blk_cfg.time_us := u;
+             blk_cfg.multiplier := x;
             end;
          7 : begin // Shunt + Bus
              result := CHART_UI_MASK;
@@ -337,15 +339,23 @@ begin
              blk_cfg.data[0].reg_addr := 1;
              blk_cfg.data[1].reg_addr := 2;
              blk_cfg.time_us := (i + u) shr 1;
+             blk_cfg.multiplier := x;
              //if i < u then i := u;
             end;
          else begin
             result := 0;
             blk_cfg.rd_count := 0;
-            blk_cfg.time_us := 1000;
+            blk_cfg.time_us := 10000;
+            blk_cfg.multiplier := 0;
             end;
      end;
-
+     // задать максимум регистров в пакете
+     x := blk_cfg.time_us shl blk_cfg.multiplier;
+     x := x div (30000 div 30);
+     if(x > 29) then x := 29;
+     if mask = 7 then x := x and $fffe;
+     blk_cfg.pktcnt := 30 - x;
+     // задать частоту шины i2c в кГц
      blk_cfg.clk_khz := SpinEditCLkKHz.Value;
      // TabBusClkTiming[i];
 
