@@ -15,7 +15,8 @@ const
 //    WM_NEW_ADC_BLK = WM_USER+2;
 
     INA2XX_I2C_ADDR = $80;
-    STM32_DEVICE_ID = $16;
+    I2C_DEVICE_ID = $16;
+    HI_DEVICE_TYPE = $10;
     INA226_MID_REG = $fe;
     INA226_DID_REG = $ff;
     INA226_MID = $4954;
@@ -141,7 +142,6 @@ type
     LabelMXU: TLabel;
     CheckBoxTrigerRiseU: TCheckBox;
     EditTriggerU: TEdit;
-    Button1: TButton;
     procedure btnReScanComDevices(Sender: TObject);
     procedure FormCreate(Sender: TObject);
     procedure ReScanComDevices;
@@ -201,6 +201,7 @@ type
   private
     flgValueChg : boolean;
     Ini_Cfg : Tcfg_ini;
+    dev_type : byte;
     dev_id : byte;
     dev_ver: word;
     dev_alert_addr : byte;
@@ -325,7 +326,7 @@ end;
 procedure TCommThread.QueryPort;
 var
   Buff: array[0..127] of Byte;
-  ByteReaded, ByteWrited, dErr, itx: Dword;
+  ByteReaded, ByteWrited, itx: Dword;
   i, cnt : integer;
 begin
   if purge_com <> 0 then begin
@@ -391,9 +392,9 @@ begin
           else begin
             // ошибки при чтении регистров по таймеру
             if (bufcom[0] = 9) then begin
-                dev_all_send_count :=  Buff[0+2] or (Buff[1+2] shl 8) or (Buff[2+2] shl 16) or (Buff[3+2] shl 24);
-                dev_not_send_count :=  Buff[4+2] or (Buff[5+2] shl 8) or (Buff[6+2] shl 16) or (Buff[7+2] shl 24);
-                dev_send_err := Buff[8+2]; // номер ошибки
+                dev_all_send_count :=  bufcom[0+2] or (bufcom[1+2] shl 8) or (bufcom[2+2] shl 16) or (bufcom[3+2] shl 24);
+                dev_not_send_count :=  bufcom[4+2] or (bufcom[5+2] shl 8) or (bufcom[6+2] shl 16) or (bufcom[7+2] shl 24);
+                dev_send_err := bufcom[8+2]; // номер ошибки
             end
             else begin
                 dev_all_send_count := 0;
@@ -867,12 +868,12 @@ t : dword;
 begin
   t := blk_cfg.time_us shl blk_cfg.multiplier;
   if t <> 0 then begin
-    if ChartEnables = CHART_UI_MASK then begin
-      k := 2000000.0/t;
-    end
-    else begin
+//    if ChartEnables = CHART_UI_MASK then begin
+//      k := 2000000.0/t;
+//    end
+//    else begin
       k := 1000000.0/t;
-    end;
+//    end;
     StatusBar.Panels[1].Text := FormatFloat('# ##0.0', k) + ' sps';
   end;
 end;
@@ -891,6 +892,7 @@ begin
   SamplesAutoStop := False;
 
   Ini_Cfg.none := $00;
+  dev_type := 0;
   dev_id := 0;
   dev_send_err := 0;
   ChartEnables := 0;
@@ -939,7 +941,7 @@ begin
         if not GetDevVersion then begin
           CloseComThread;
           CloseCom;
-          if dev_id <> STM32_DEVICE_ID then begin
+          if dev_id <> I2C_DEVICE_ID then begin
             ShowMessage('Error device ID!'+#13#10+'Com closed.');
             StatusBar.Panels[2].Text:='Не тот ID у устройства на '+ sComNane+'!';
           end else begin
@@ -1106,10 +1108,14 @@ end;
 procedure TfrmMain.ButtonConfigRegClick(Sender: TObject);
 begin
   if RdAllRegs then begin
+    if (dev_type = HI_DEVICE_TYPE) then
+      Form226Config.SpinEditCLkKHz.MaxValue := 1200
+    else
+      Form226Config.SpinEditCLkKHz.MaxValue := 1000;
     if dev_ina226 then begin
       Form226Config.Left := Left + (Width div 2) - Form226Config.Width div 2;
       Form226Config.Top := Top + (Height div 2) - Form226Config.Height div 2;
-      FormConfigOk := Form226Config.ShowModal
+      FormConfigOk := Form226Config.ShowModal;
     end
     else  begin
       Form219Config.Left := Left + (Width div 2) - Form219Config.Width div 2;
@@ -1198,10 +1204,11 @@ begin
     buftx[1]:= CMD_GET_VER; // Get Version
     if SendBlk(0) then begin
       if ReadBlk(buftx[1]) and (lenrx = 4) then begin
-        dev_id := bufrx[0] or (bufrx[1] shl 8);
+        dev_type := bufrx[1];
+        dev_id := bufrx[0];
         dev_ver := bufrx[2] or (bufrx[3] shl 8);
-        StatusBar.Panels[2].Text:='Устройство ID:' + IntToHex(dev_id, 2) +' версии '+IntToStr((dev_ver shr 12) and $0f) +'.'+IntToStr((dev_ver shr 8) and $0f)+'.'+IntToStr((dev_ver shr 4) and $0f)+'.'+IntToStr(dev_ver and $0f)+' подключено на '+ sComNane +'.';
-        if dev_id = STM32_DEVICE_ID then begin
+        StatusBar.Panels[2].Text:='Устройство ID:' + IntToHex(dev_type, 2) + '-' + IntToHex(dev_id, 2) +' версии '+IntToStr((dev_ver shr 12) and $0f) +'.'+IntToStr((dev_ver shr 8) and $0f)+'.'+IntToStr((dev_ver shr 4) and $0f)+'.'+IntToStr(dev_ver and $0f)+' подключено на '+ sComNane +'.';
+        if dev_id = I2C_DEVICE_ID  then begin
           if StopReadDevice
             and ReadRegister(INA226_MID_REG)
             and ReadRegister(INA226_DID_REG) then begin

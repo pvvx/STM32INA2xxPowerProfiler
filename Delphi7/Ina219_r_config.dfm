@@ -176,7 +176,7 @@ object Form219Config: TForm219Config
     Width = 65
     Height = 22
     Increment = 50
-    MaxValue = 1100
+    MaxValue = 1200
     MinValue = 50
     TabOrder = 8
     Value = 1000

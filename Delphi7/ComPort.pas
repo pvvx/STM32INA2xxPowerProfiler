@@ -184,8 +184,8 @@ begin
 end;
 
 function ReadCom(Buf:Pointer; BufLen :Dword) : boolean;
-var
- dErr: Dword;
+//var
+// dErr: Dword;
 begin
  result := False;
  if (hCom<>INVALID_HANDLE_VALUE)and(Buf<>Nil)and(BufLen<>0) then begin

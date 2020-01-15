@@ -268,7 +268,7 @@ begin
             end;
          6 : begin // Bus
              result := CHART_U_MASK;
-             i := u;
+//             i := u;
              if(mode <> 0) then blk_cfg.rd_count := 1;
              blk_cfg.data[0].reg_addr := 2;
              blk_cfg.data[1].reg_addr := 2;
