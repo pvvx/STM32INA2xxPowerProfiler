@@ -22,6 +22,7 @@ JDY-10 pin PC5:<br>
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/UserSet.gif)
 # AndroidScreenshot
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/AndroidScreenshot.gif)
+
 Полной оптимизации LowPower на BLE версии пока не производилось. Текущие при TX +8 дБ (вместе с INA2xx):
 * В режиме ожидания соединения: до 0.200 мА (3.3В)
 * В режиме соединения и передачи данных по BLE: от 9 до 11 мА (3.3В) (зависит от скорости опроса INA2xx)
