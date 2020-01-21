@@ -14,13 +14,13 @@ STM32/TLSR8266 INA219/INA226 Power Profiler
 JDY-10 pin PC5:<br>
 ='0' (gnd) - BLE<br>
 ='1' (+3.3v) - USB<br>
-#WebBluetooth: Connect
+# WebBluetooth: Connect
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/WebBluetooth1.gif)
-#WebBluetooth: Work
+# WebBluetooth: Work
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/WebBluetooth2.gif)
-#WebBluetooth: Settings in test.html
+# WebBluetooth: Settings in test.html
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/UserSet.gif)
-#AndroidScreenshot
+# AndroidScreenshot
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/AndroidScreenshot.gif)
 
 [Готовые прошивка и программа](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/bin/STM32INA219BIN.zip)
