@@ -22,7 +22,7 @@
   </body>
 <script type="text/javascript">
 // User Set: 
-var smprate = 100; // set 0.1..850
+var smprate = 500; // set 0.1..850
 // INA219
 var INA219kHunt = 0.1;
 var INA219zHunt = 0.0;
@@ -102,7 +102,7 @@ function ShowGrf(value) {
 	}
 	else {
 		sttim = new Date().getTime();
-		old_idx = idx;
+		old_idx = cur_idx;
 	}
 	if(!stg) {
 		gu = new Dygraph(
@@ -284,7 +284,7 @@ function SendStart(){
 		while(tus > 0x1ffff) {tus /= 2; sk++ }
 		tus /= 2;
 		let ca = 0;
-		let xsps = 1000000/588;
+		let xsps = 1000000/2/588;
 		while(xsps > smprate) {ca++;xsps/=2;}
 		if(ca > 3) ca=3;
 		ca += 4;
@@ -293,6 +293,7 @@ function SendStart(){
 		cmd[4] = sk; cmd[5] = cnt;
 		cmd[6] = tus & 0xff; cmd[7] = (tus>>8) & 0xff;
 		cmd[12] = cfgreg & 0xff; cmd[13] = (cfgreg>>8) & 0xff; // Configuration Register
+		log('cfgreg: 0x'+cfgreg.toString(16)+', cnt: '+cnt+', sk: '+sk+', tus: '+tus);
 		characteristicCache.writeValue(cmd);
 		if(smprate <= 2)
 			setTimeout(ConnParUpdate124, 50);
@@ -316,15 +317,16 @@ function SendStart(){
 		while(tus > 0x1ffff) {tus /= 2; sk++ }
 		tus /= 2;
 		let ca = 0;
-		let xsps = 1000000/532;
+		let xsps = 1000000/2/532;
 		while(xsps > smprate) {ca++;xsps/=2;}
-		if(ca > 3) ca=3;
+		if(ca > 7) ca=7;
 		ca += 8;
 		let cfgreg = 0x0007|(INA219BUS<<13)|(INA219PGA<<11)|(ca<<3)|(ca<<7);
 		let cmd = new Uint8Array([12, 1, 2, 1, 4, 2, 0x12,0x7A, 0xE8,0x03, 0x80,0x00,0xFF,0x3F]);
 		cmd[4] = sk; cmd[5] = cnt;
 		cmd[6] = tus & 0xff; cmd[7] = (tus>>8) & 0xff;
 		cmd[12] = cfgreg & 0xff; cmd[13] = (cfgreg>>8) & 0xff; // Configuration Register
+		log('cfgreg: 0x'+cfgreg.toString(16)+', cnt: '+cnt+', sk: '+sk+', tus: '+tus);
 		characteristicCache.writeValue(cmd);
 		if(smprate <= 2)
 			setTimeout(ConnParUpdate124, 50);
