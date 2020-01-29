@@ -25,9 +25,9 @@
 var smprate = 500; // set 0.1..850
 // INA219
 var INA219kHunt = 0.1;
-var INA219zHunt = 0.0;
+var INA219zHunt = -0.1;
 var INA219kBus = 0.5;
-var INA219zBus = 0.0;
+var INA219zBus = -1.0;
 var INA219PGA = 0; //0 - /1 (+-40mv), 1 - /2 (+-80mv), 2 - /4 (+-160mv), 3 - /8 (+-320mv)
 var INA219BUS = 0; //0 - 0..16V, 1 - 0..32V
 //INA226
@@ -202,8 +202,7 @@ function connect() {
 function requestBluetoothDevice() {
   log('Requesting bluetooth device...');
   return navigator.bluetooth.requestDevice({
-//    acceptAllDevices: true,
-	filters: [{namePrefix: 'tPWProf'}],
+	filters: [{namePrefix: 'tBLE'}],
 	optionalServices: ['0000ffe0-0000-1000-8000-00805f9b34fb', '0000ffe1-0000-1000-8000-00805f9b34fb']
   }).
 	then(device => {
@@ -245,13 +244,20 @@ function connectDeviceAndCacheCharacteristic(device) {
 		return characteristicCache;
 	  });
 }
-function ConnParUpdate20() {
-	log('Connect parameters Update 20ms');
-	characteristicCache.writeValue(new Uint8Array([8, 4, 16,0, 16,0, 0,0, 200,0]));
-}	
-function ConnParUpdate125() {
-	log('Connect parameters Update 125ms');
-	characteristicCache.writeValue(new Uint8Array([8, 4, 100,0, 100,0, 0,0, 200,0]));
+/* typedef struct { 
+	uint8_t size;	// размер данных пакета (2..116 байта, MTU TX = 125)
+	uint8_t cmd;	// номер команды / тип пакета (ADC = 4)
+	uint16_t intervalMin; // Minimum value for the connection event (interval. 0x0006 - 0x0C80 * 1.25 ms)
+	uint16_t intervalMax; // Maximum value for the connection event (interval. 0x0006 - 0x0C80 * 1.25 ms)
+	uint16_t latency; // Number of LL latency connection events (0x0000 - 0x03e8)
+	uint16_t timeout; // Connection Timeout (0x000A - 0x0C80 * 10 ms) 
+} dev_ConnectParams_t; */
+function ConnParUpdate(tms) {
+	let t = tms/1.25;
+	let tt = tms;
+	if(tt < 200) tt = 200; // 1 sec
+	log('Connect parameters Update: interval '+tms+' ms, timeout '+(tt*10)+' ms');
+	characteristicCache.writeValue(new Uint8Array([8, 4, t&0xff,(t>>8)&0xff, t&0xff,(t>>8)&0xff, 0,0, tt&0xff,(tt>>8)&0xff]));
 }	
 var cnt_read = 0;
 var ina_id = 0x1234678;
@@ -296,9 +302,9 @@ function SendStart(){
 		log('cfgreg: 0x'+cfgreg.toString(16)+', cnt: '+cnt+', sk: '+sk+', tus: '+tus);
 		characteristicCache.writeValue(cmd);
 		if(smprate <= 2)
-			setTimeout(ConnParUpdate124, 50);
+			setTimeout(ConnParUpdate(150), 50);
 		else if(smprate <= 10)
-			setTimeout(ConnParUpdate20, 50);
+			setTimeout(ConnParUpdate(25), 50);
 	} else {
 		log('INA219 chip?');
 		title_id = 'INA219';
@@ -329,9 +335,9 @@ function SendStart(){
 		log('cfgreg: 0x'+cfgreg.toString(16)+', cnt: '+cnt+', sk: '+sk+', tus: '+tus);
 		characteristicCache.writeValue(cmd);
 		if(smprate <= 2)
-			setTimeout(ConnParUpdate124, 50);
+			setTimeout(ConnParUpdate(150), 50);
 		else if(smprate <= 10)
-			setTimeout(ConnParUpdate20, 50);
+			setTimeout(ConnParUpdate(25), 50);
 	}
 }
 function SendInit(){
