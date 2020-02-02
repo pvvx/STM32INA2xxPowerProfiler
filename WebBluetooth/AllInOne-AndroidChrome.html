@@ -121,9 +121,7 @@
 }
 </style>
   <head>
-	<link rel="stylesheet" href="tests.css">
 	<title>PowerProfiler</title>
-	<script type="text/javascript" src="dygraph.min.js"></script>
   </head>
   <body>
 	<div style="height: auto; width: auto; text-align: center;">
@@ -142,15 +140,17 @@
   </body>
 <script type="text/javascript">
 // User Set: 
-var smprate = 100; // set 0.1..850
-// INA219
+var smprate = 10; // set 0.125..1250 sps (x2 points: I and U)
+if(smprate > 2500) smprate = 2500; // test only
+else if(smprate < 0.125) smprate = 0.125;
+// INA219 settings:
 var INA219kHunt = 0.1;
 var INA219zHunt = -0.1;
 var INA219kBus = 0.5;
 var INA219zBus = -1.0;
 var INA219PGA = 0; //0 - /1 (+-40mv), 1 - /2 (+-80mv), 2 - /4 (+-160mv), 3 - /8 (+-320mv)
 var INA219BUS = 0; //0 - 0..16V, 1 - 0..32V
-//INA226
+// INA226 settings:
 var INA226kHunt = 1.25;
 var INA226zHunt = 0.0;
 var INA226kBus = 0.05;
@@ -169,7 +169,7 @@ var smps = smprate;
 var sttim = 0;
 var cur_idx = 0;
 var old_idx = 0;
-var samples = 20000;
+var samples = 10000;
 var rend = 1;
 var oldblkid = 0;
 var rdnextflg = false;
@@ -244,7 +244,9 @@ function ShowGrf(value) {
 					legend: 'always',  // "follow"
 					digitsAfterDecimal: 3,
 			});
-		setInterval(function(){renderChart()}, 50);
+		let t = 500/smprate;
+		if(t < 50) t = 50;
+		setInterval(function(){renderChart()}, t);
 		stg = 1;
 	}
 }
@@ -364,67 +366,48 @@ function connectDeviceAndCacheCharacteristic(device) {
 		return characteristicCache;
 	  });
 }
-/* typedef struct { 
-	uint8_t size;	// размер данных пакета (2..116 байта, MTU TX = 125)
-	uint8_t cmd;	// номер команды / тип пакета (ADC = 4)
-	uint16_t intervalMin; // Minimum value for the connection event (interval. 0x0006 - 0x0C80 * 1.25 ms)
-	uint16_t intervalMax; // Maximum value for the connection event (interval. 0x0006 - 0x0C80 * 1.25 ms)
-	uint16_t latency; // Number of LL latency connection events (0x0000 - 0x03e8)
-	uint16_t timeout; // Connection Timeout (0x000A - 0x0C80 * 10 ms) 
-} dev_ConnectParams_t; */
+var con_interval;
+var pack_samples = 4;
 function ConnParUpdate(tms) {
 	let t = tms/1.25;
-	let tt = tms;
-	if(tt < 200) tt = 200; // 1 sec
-	log('Connect parameters Update: interval '+tms+' ms, timeout '+(tt*10)+' ms');
+	if (t < 6) t = 6; // min interval 6 * 1.25 = 7.5 ms
+	else if (t > 3200) t = 3200; // max interval 0x0C80 * 1.25 = 4000 ms
+	t = t & 0xfff;
+	con_interval = t;
+	let tt = t; // max tmeout 0x0C80 * 10 = 32000 ms
+	if(t < 200) tt = 200; // tmeout 200*10 = 2000 ms
+	log('Set Connect parameters #4: interval '+tms+' ms, timeout '+(tt*10)+' ms');
 	characteristicCache.writeValue(new Uint8Array([8, 4, t&0xff,(t>>8)&0xff, t&0xff,(t>>8)&0xff, 0,0, tt&0xff,(tt>>8)&0xff]));
 }	
 var cnt_read = 0;
-var ina_id = 0x1234678;
-function SendStart(){
-	if(ina_id == 0x1234678) {
-		cnt_read++;
-		if(cnt_read > 3) {
-			alert('Device unrecognized (not read register[254])!');
-			disconnect();
-		} else {
-			log('Send command: Read register[254]');
-			characteristicCache.writeValue(new Uint8Array([2, 0x10, 0x80, 0xfe]));
-			setTimeout(SendStart, 200);
-		}
-	} else if(ina_id == 21577) {
+function WaitConnection() {
+	if(!stg) {
+		alert('Device not Start!');
+		disconnect();
+	}
+}	
+function SendStart(ina_id) {
+	let cfgreg;
+	let cnt = pack_samples; // max for MTU TLSR8266, data 116*2+2 = 234 bytes
+	let sk = 0;
+	let tus = 1000000/smprate;
+	if(cnt < 4) cnt = 4;
+	while(tus > 0x1ffff) {tus /= 2; sk++ };
+	tus /= 2;
+	let ca = 0;
+	let xsps = 1000000/2/588;
+	while(xsps > smprate) {ca++;xsps/=2;}
+	let cmd = new Uint8Array([12, 1, 2, 1, 4, 2, 0x12,0x7A, 0xE8,0x03, 0x80,0x00,0xFF,0x3F])
+	if(ina_id == 21577) {
 		log('INA226 chip registered!');
 		title_id = 'INA226';
 		kHunt = INA226kHunt;
 		zHunt = INA226zHunt;
 		kBus = INA226kBus;
 		zBus = INA226zBus;
-		if(smprate > 850) smprate = 850;
-		else if(smprate < 0.1) smprate = 0.1;
-		let cnt = 116;
-		let sk = 0;
-		let tus = 1000000/smprate;
-		if(smprate < 500) cnt = (smprate*116/500)&0xfffe;
-		if(cnt < 2) cnt = 2;
-		log('Send config: Start, I2C CLK 1MHz, Read Shunt & Bus, step '+tus+' us');
-		while(tus > 0x1ffff) {tus /= 2; sk++ }
-		tus /= 2;
-		let ca = 0;
-		let xsps = 1000000/2/588;
-		while(xsps > smprate) {ca++;xsps/=2;}
 		if(ca > 3) ca=3;
 		ca += 4;
-		let cfgreg = 0x0007|(ca<<3)|(ca<<6);
-		let cmd = new Uint8Array([12, 1, 2, 1, 4, 2, 0x12,0x7A, 0xE8,0x03, 0x80,0x00,0xFF,0x3F]);
-		cmd[4] = sk; cmd[5] = cnt;
-		cmd[6] = tus & 0xff; cmd[7] = (tus>>8) & 0xff;
-		cmd[12] = cfgreg & 0xff; cmd[13] = (cfgreg>>8) & 0xff; // Configuration Register
-		log('cfgreg: 0x'+cfgreg.toString(16)+', cnt: '+cnt+', sk: '+sk+', tus: '+tus);
-		characteristicCache.writeValue(cmd);
-		if(smprate <= 2)
-			setTimeout(ConnParUpdate(150), 50);
-		else if(smprate <= 10)
-			setTimeout(ConnParUpdate(25), 50);
+		cfgreg = 0x0007|(ca<<3)|(ca<<6);
 	} else {
 		log('INA219 chip?');
 		title_id = 'INA219';
@@ -432,38 +415,21 @@ function SendStart(){
 		zHunt = INA219zHunt;
 		kBus = INA219kBus;
 		zBus = INA219zBus;
-		if(smprate > 850) smprate = 850;
-		else if(smprate < 0.1) smprate = 0.1;
-		let cnt = 116;
-		let sk = 0;
-		let tus = 1000000/smprate;
-		if(smprate < 500) cnt = (smprate*116/500)&0xfffe;
-		if(cnt < 2) cnt = 2;
-		log('Send config: Start, I2C CLK 1MHz, Read Shunt & Bus, step '+tus+' us');
-		while(tus > 0x1ffff) {tus /= 2; sk++ }
-		tus /= 2;
-		let ca = 0;
-		let xsps = 1000000/2/532;
-		while(xsps > smprate) {ca++;xsps/=2;}
 		if(ca > 7) ca=7;
 		ca += 8;
-		let cfgreg = 0x0007|(INA219BUS<<13)|(INA219PGA<<11)|(ca<<3)|(ca<<7);
-		let cmd = new Uint8Array([12, 1, 2, 1, 4, 2, 0x12,0x7A, 0xE8,0x03, 0x80,0x00,0xFF,0x3F]);
-		cmd[4] = sk; cmd[5] = cnt;
-		cmd[6] = tus & 0xff; cmd[7] = (tus>>8) & 0xff;
-		cmd[12] = cfgreg & 0xff; cmd[13] = (cfgreg>>8) & 0xff; // Configuration Register
-		log('cfgreg: 0x'+cfgreg.toString(16)+', cnt: '+cnt+', sk: '+sk+', tus: '+tus);
-		characteristicCache.writeValue(cmd);
-		if(smprate <= 2)
-			setTimeout(ConnParUpdate(150), 50);
-		else if(smprate <= 10)
-			setTimeout(ConnParUpdate(25), 50);
-	}
+		cfgreg = 0x0007|(INA219BUS<<13)|(INA219PGA<<11)|(ca<<3)|(ca<<7);
+	}			
+	cmd[4] = sk; cmd[5] = cnt;
+	cmd[6] = tus & 0xff; cmd[7] = (tus>>8) & 0xff;
+	cmd[12] = cfgreg & 0xff; cmd[13] = (cfgreg>>8) & 0xff; // Configuration Register
+	log('cfgreg: 0x'+cfgreg.toString(16)+', cnt: '+cnt+', sk: '+sk+', tus: '+tus);
+	log('Send command #1: Set config - Start, I2C CLK 1MHz, Read Shunt & Bus, step '+(1000/smprate)+' ms');
+	characteristicCache.writeValue(cmd);
 }
 function SendInit(){
-	log('Send command: Init(0)');
-	characteristicCache.writeValue(new Uint8Array([32, 1, 0, 1, 4, 2, 0x12,0x7A, 0xE8,0x03, 0x80,0x00,0xFF,0x01, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0x80,0x01, 0x80,0x02, 0x80,0x01, 0x80,0x02]));
-	setTimeout(SendStart, 200);
+	log('Send command #1: StartInit(stop)');
+	characteristicCache.writeValue(new Uint8Array([32, 1,
+	0, 1, 0, 2, 80, 195, 232, 3, 128, 0, 255, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 128, 2, 128, 1, 128, 2])); 
 }	
 // Включение получения уведомлений об изменении характеристики
 function startNotifications(characteristic) {
@@ -473,29 +439,88 @@ function startNotifications(characteristic) {
 		log('Notifications started');
 		characteristic.addEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
 	    devcnn = 1;
-		setTimeout(SendInit, 100);
+		cnt_read = 0;
+		setTimeout(SendInit, 500);
+		setTimeout(WaitConnection, 5000+7500/smprate);
 	});
 }
+function ResponsePkt(head, value) {
+	let ds = value.getUint8(0);
+	let s = head + '['+ds+']#'+value.getUint8(1).toString(16)+':';
+    for(let i=0; i < ds; i++) {
+		s+=' '+value.getUint8(i+2);
+		if(i<ds-1) s+=',';
+	}
+	log(s);
+}	
+var ina_id;
 function handleCharacteristicValueChanged(event) {
 	let value = event.target.value.buffer ? event.target.value : new DataView(event.target.value);
 	if(value.byteLength > 1) {
-		if(value.getUint8(0)+2 >= value.byteLength) {
+		let ds = value.getUint8(0);
+		if(ds+2 >= value.byteLength) {
 			let idx = value.getUint8(1);
 			if(idx == 7)
 				ShowGrf(value);
-			else if(idx == 0x10 && value.getUint8(0) > 3 && value.getUint8(3) == 254) {
-				log('RawPkt['+value.byteLength+']: '+ value.getUint8(0)+ ', '+value.getUint8(1)+', '+value.getUint8(2)+', '+value.getUint8(3)+', '+value.getUint8(4)+', '+value.getUint8(5));
+			else if(idx == 0x10 && ds > 3 && value.getUint8(3) == 254) {
+//				ResponsePkt('ResponsePkt', value);
 				ina_id = value.getUint16(4,true);
-				log('Register[254]: '+ ina_id);
+				log('I2C(0x'+value.getUint8(2).toString(16)+') Register['+value.getUint8(3)+'] = '+ina_id);
+				if(smprate > 1000) { // Max speed ~2200 sps
+					pack_samples = 116;
+					ConnParUpdate(7.5) 
+				}
+				else if(smprate > 50) { // > 50 sps -> Not low power! Interval read regs < 10 ms, max pack of 116 samples
+					let t = 500/smprate; // 1000/(smprate*2) шаг опроса регистров INAxxx в ms (50 sps -> 10 ms, 1000 sps -> 0.5 ms)
+					pack_samples = Math.round(1.5+200/t)&0xfe; // ограничение периода передачи пакета до 200 ms
+					if(pack_samples > 116) pack_samples = 116;
+					ConnParUpdate(pack_samples*t/4); // interval
+				}					
+				else {	// Low Power Enable -> 4 intervals min for send BLE data (pack of 4 samples)
+					if(smprate > 25)
+						pack_samples = 6;
+					else
+						pack_samples = 4;
+					ConnParUpdate(500/smprate);
+				}
 			}
 			else if(idx == 15 || idx >= 128) {
-			    if(value.getUint8(0) > 1)
-					alert('Error['+idx+']: '+value.getUint16(2,true)+'! blk['+value.byteLength+'] '+value.getUint8(0)+','+value.getUint8(1)+'...');
-				else
-					alert('Error['+idx+']: '+value.getUint8(0)+','+value.getUint8(1));
+				ResponsePkt('ErrorPkt', value);
 			}
-			else
-				log('ResponsePkt['+value.byteLength+']: '+ value.getUint8(0)+ ', '+value.getUint8(1)+'..');
+			else {
+				ResponsePkt('ResponsePkt', value);
+				if(idx == 4) {
+					log('Connect parameters [interval (min/max): '+value.getUint16(2,true)*1.25+ '/'+ value.getUint16(4,true)*1.25+' ms, latency: ' +value.getUint16(6,true)+', timeout: '+value.getUint16(8,true)*10+' ms]')
+					log('Current Connect parameters ('+value.getUint16(10,true)+') [interval: '+value.getUint16(12,true)*1.25+' ms, latency: ' +value.getUint16(14,true)+', timeout: '+value.getUint16(16,true)*10+' ms]')
+					if(!cnt_read) {
+						if(value.getUint16(12,true) != con_interval) {
+							log('Send command #4: Get current connect parameters...');
+							characteristicCache.writeValue(new Uint8Array([0, 4]));
+						} else {
+							cnt_read = 1;
+							SendStart(ina_id);
+						}							
+					}
+				} else {
+					if(idx == 1) {
+			    		let s = 'DevConfig['+ds+']: ';
+						s+='rd_count: '+value.getUint8(2);
+						if(value.getUint8(2) == 0) {
+							s+=' -> Stop';
+						} else {
+							s+=', wr_count: '+value.getUint8(3);
+							s+=', pkt_count: '+value.getUint8(5);
+							s+=', time: '+value.getUint16(6,true)+' << '+(value.getUint8(4)+1)+' = '+(value.getUint16(6,true)<<(value.getUint8(4)+1))+' us';
+							s+=', I2C CLK: '+value.getUint16(8,true) +' kHz, ...';
+						}
+						log(s);
+						if(!cnt_read) {
+							log('Send command #10: Read register 254 from I2C device at 0x80...');
+							characteristicCache.writeValue(new Uint8Array([2, 0x10, 0x80, 0xfe]));
+						}
+					} 
+				}
+			}
 		}
 		else
 			log('RawPkt['+value.byteLength+']: '+ value.getUint8(0)+ ', '+value.getUint8(1)+'..');
