@@ -11,8 +11,8 @@ STM32/TLSR8266 INA219/INA226 Power Profiler
 
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/JDY-10-INA226.gif)
 
-JDY-10 pin PC5:<br>
-='0' (gnd) - BLE<br>
+JDY-10 pin PD5:<br>
+='0' (“not connected or gnd") - BLE<br>
 ='1' (+3.3v) - USB<br>
 # WebBluetooth: Connect
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/WebBluetooth1.gif)
@@ -38,13 +38,15 @@ JDY-10 pin PC5:<br>
 * В режиме соединения и передачи данных в USB при 14 sps..12 ksps: от 10.1 до 10.9 мА (3.3В)<br>
 Ток при работе с USB имеет зависимость от нагрузки - кабеля и ответного USB.
 
-# Deep-Sleep (in BLE Mode):
+# Deep-Sleep in BLE Mode (PD5 not connected):
 
-Timer 30 sec, PD4 = ”not connected or 1“, PB0 = “0”, PA5=”not connected or 1“:<br>
-3 uA (TLSR8266) + 57.8 uA (INA219 sleep) = 60.8 uA. (WakeUP: PB0 = “not connected or 1”)
+PB0 - Deep-Sleep Timer 30 sec<br>
+3 uA (TLSR8266)<br>
+WakeUP: PB0 = “not connected or 1”
 
-WakeUP(PA5), PD4 = ”not connected or 1“, PB0 = “not connected or 1”, PA5=”0“:<br>
-1.4 uA (TLSR8266) + 57.8 uA (INA219 sleep) = 59.2 uA. (WakeUP PA5 = “1”)
+PA5 - Deep-Sleep Pin WakeUP<br>
+1.4 uA (TLSR8266)<br>
+WakeUP: PA5 = “1”
 
 
 [Готовые прошивка и программа](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/bin/STM32INA219BIN.zip)

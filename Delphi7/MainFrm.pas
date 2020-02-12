@@ -10,10 +10,6 @@ uses
   TeeSeriesStats,  IniFiles;
 
 const
-//    WM_NEW_STATUS = WM_USER+1;
-//    WM_RD_COMMAND = WM_USER+1;
-//    WM_NEW_ADC_BLK = WM_USER+2;
-
     INA2XX_I2C_ADDR = $80;
     I2C_DEVICE_ID = $16;
     HI_DEVICE_TYPE = $10;
@@ -92,9 +88,6 @@ type
   TCommThread = class(TThread)
   private
     procedure QueryPort;
-//  public
-//   function GetWaitCnt : dword;
-//   procedure SetWaitCnt(cnt : dword);
   protected
     procedure Execute; override;
   end;
@@ -189,7 +182,6 @@ type
     function StopReadDevice: boolean;
     procedure ShowAllRegs;
     procedure ClearGrf;
-//    procedure SpeedButton1Click(Sender: TObject);
     procedure CheckBoxOpenGLClick(Sender: TObject);
     procedure CheckBoxTrigerClick(Sender: TObject);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
@@ -225,8 +217,6 @@ type
     CurI, CurU: double;
     SumI, SumU: double;
     FormConfigOk : integer;
-//    procedure ReadNewAdcBlk(var Msg: TMessage); message WM_NEW_ADC_BLK;
-//    procedure ReadCommand(var Msg: TMessage); message WM_RD_COMMAND;
   public
     { Public declarations }
   end;
@@ -263,7 +253,6 @@ var
    bufcom : array [0..COM_BUF_CNT] of Byte;
     idx_bufcom : dword;
 
-//   dev_send_smps : dword;
     dev_not_send_count : dword;
     dev_all_send_count : dword;
     dev_send_err : byte;
@@ -293,7 +282,6 @@ begin
   end;
   if CommThread = nil then begin
     SysErrorMessage(GetLastError);
-//    Exit;
   end;
 end;
 
@@ -311,18 +299,6 @@ begin
   until Terminated;
 end;
 
-{
-function TCommThread.GetWaitCnt : dword;
-begin
-  result := wait_cnt;
-end;
-
-procedure TCommThread.SetWaitCnt(cnt : dword);
-begin
-  wait_cnt := cnt;
-end;
-}
-
 procedure TCommThread.QueryPort;
 var
   Buff: array[0..127] of Byte;
@@ -337,11 +313,8 @@ begin
     ismprx := 0;
   end;
   if lentx <> 0 then begin
-//     buftx[0] := lentx - 2;
      if not WriteFile(hCom, buftx, lentx, ByteWrited, Nil) then begin
        errtx := 1;
-//       ClearCommError(hCom,dErr,Nil);
-//    SysErrorMessage(GetLastError);
      end
      else if lentx <> ByteWrited then begin
        errtx := 2;
@@ -374,7 +347,6 @@ begin
             if SamplesEna then begin
               if (bufcom[0] > 1) then begin
                 cnt := bufcom[0] div 2;
-//                dev_send_smps := dev_send_smps + cnt;
                 itx := ismptx and SMP_BUF_CNT;
                 for i:=1 to cnt do begin
                   bufsmp[itx] := bufcom[i*2] or (bufcom[i*2 + 1] shl 8);
@@ -383,10 +355,6 @@ begin
                 end;
                 ismptx := itx;
               end;
-            end
-            else begin
-//               ismptx := 0;
-//               ismprx := 0;
             end;
           end
           else begin
@@ -401,7 +369,6 @@ begin
                 dev_not_send_count := 0;
                 dev_send_err := 255; // общая ошибка
             end;
-//            SendMessage(frmMain.Handle, WM_NEW_ADC_BLK, 1, 0);
           end;
         end else begin
         // не $07 (выборка по фильтру cmd: wait_id)
@@ -415,7 +382,6 @@ begin
                   move(bufcom[2], bufrx, bufcom[0]);
               lenrx := bufcom[0];
               wait_cnt := 0;
-//              SendMessage(frmMain.Handle, WM_RD_COMMAND, 1, 0);
             end else begin
               Inc(wait_cnt);
               if wait_cnt > 3 then begin
@@ -423,8 +389,6 @@ begin
                 lenrx := 0;
                 wait_cnt := 0;
                 wait_id := wait_id or $80; // timeout or error
-//                SendMessage(frmMain.Handle, WM_RD_COMMAND, 1, 0);
-//                StatusBar.Panels[2].Text:='Нет ответа от устройства в '+ sComNane+'!';
                 exit;
               end;
             end;
@@ -447,7 +411,6 @@ begin
         // сбой фреймов протокола
         idx_bufcom := 0;
         bufcom[0] := 0;
-//        break;
     end;
   end;
 end;
@@ -558,8 +521,8 @@ begin
      CheckBoxTrigerRiseU.Checked := IniFile.ReadBool('System','TriggerUena', CheckBoxTrigerRiseU.Checked);
      CheckBoxTrigerRiseI.Checked := IniFile.ReadBool('System','TriggerIena', CheckBoxTrigerRiseI.Checked);
 
-     Top := IniFile.ReadInteger('Setup','Top',0);
-     Left := IniFile.ReadInteger('Setup','Left',0);
+     Top := IniFile.ReadInteger('Setup','Top',10);
+     Left := IniFile.ReadInteger('Setup','Left',10);
      if Screen.DesktopHeight <= Top then Top := 10;
      if Screen.DesktopWidth <= Left then Left := 10;
      Height := IniFile.ReadInteger('Setup','Height',Height);
@@ -882,6 +845,8 @@ procedure TfrmMain.FormCreate(Sender: TObject);
 begin
   DecimalSeparator := '.';
   flgValueChg := False;
+  if Screen.DesktopHeight <= Top then Top := 10;
+  if Screen.DesktopWidth <= Left then Left := 10;
 
   DeviceTypeRecognized := False;
 
@@ -1079,7 +1044,6 @@ begin
            SamplesAutoStop := False;
            ClearGrf;
         end;
-//        dev_send_smps := 0;
         ismptx := 0;
         ismprx := 0;
         SamplesEna := True;
@@ -1264,7 +1228,6 @@ begin
      i := regnum and 7;
    result := true;
    buftx[1]:=CMD_GET_REG; // Cmd: Get word
-//   buftx[3]:=2;
    buftx[2]:=INA2XX_I2C_ADDR;
    buftx[3]:= regnum;
    if SendBlk(2) then begin
@@ -1329,9 +1292,6 @@ begin
       break;
      end;
    end;
-//   if result then begin
-//     I_zero := I_219_zero_tab[(ina2xx_reg.config and ControlGainMsk) shr ControlGainShl];
-//   end;
    Timer1.Enabled := ft;
    SamplesEna := fs;
 end;
@@ -1543,7 +1503,6 @@ begin
     if flgComOpen then begin
       SamplesEna := False;
       Timer1.Enabled := False;
-//      PurgeCom(PURGE_TXCLEAR or PURGE_RXCLEAR);
       purge_com := 1;
       ismptx := 0;
       ismprx := 0;
