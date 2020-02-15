@@ -1,6 +1,7 @@
-# STM32INA2xxPowerProfiler
-STM32/TLSR8266 INA219/INA226 Power Profiler
+# STM32INA2xxPowerProfiler #
+(!) The further development of the project was transferred to [UBIA](https://github.com/pvvx/UBIA)
 
+STM32/TLSR8266 INA219/INA226 Power Profiler
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/STM32INA2xxPowerProfiler.gif)
 
 ![SCH](https://github.com/pvvx/STM32INA2xxPowerProfiler/blob/master/Docs/STM32INA219..gif)
